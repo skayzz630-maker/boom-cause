@@ -55,7 +55,8 @@ local _0xE1F1 = _0x46D6:GetAttribute(string.char(84,101,97,109,73,68))
 local _0x85CE = player:GetAttribute(string.char(84,101,97,109,73,68))
 if typeof(_0xE1F1) ~=string.char(115,116,114,105,110,103)or typeof(_0x85CE) ~=string.char(115,116,114,105,110,103)then return false end
 return _0xE1F1 == _0x85CE
-endlocal function _0x6DD1(_0x3C03)
+end
+  local function _0x6DD1(_0x3C03)
 if not _0xC917.PredictionEnabled then
 return _0x3C03.Position
 end
