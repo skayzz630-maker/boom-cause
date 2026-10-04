@@ -1,6 +1,5 @@
 --[[
-	DIH SCRIPT – MM2 (Rewritten Hub - Instant TP, Fling & Return)
-	ESP · GunDrop · Auto Take · Coins (slow fly) · Fly · Speed · Noclip · WalkFling · Instant Flings + Return TP
+	DIH SCRIPT – MM2 (Fling Detection & Zero-Velocity Return TP)
 ]]
 
 local Players           = game:GetService("Players")
@@ -71,6 +70,9 @@ local coinFarmBusy = false
 local FlyBV, FlyBG, FlyAnimTrack = nil, nil, nil
 local NoclipConnection, SpeedConnection, WalkFlingConnection = nil, nil, nil
 local DefaultWalkSpeed = 16
+
+-- Saved position for Fling Return
+local flingActivationPos = nil
 
 ------------------------------------------------------------------
 -- ROLE
@@ -266,7 +268,7 @@ local function ApplyWalkSpeed()
 end
 
 ------------------------------------------------------------------
--- WALKFLING & TARGET FLING (INSTANT TP + FLING + RETURN)
+-- WALKFLING & TARGET FLING (WITH DETECTION & ZERO-VELOCITY RETURN)
 ------------------------------------------------------------------
 local walkflinging = false
 local WalkFlingJumpConn = nil
@@ -316,67 +318,124 @@ local function StartWalkFling()
 	end)
 end
 
--- TÉLÉPORTATION SUR LA CIBLE, FLINGUE, PUIS RETOUR À LA POSITION DE DÉPART
-task.spawn(function()
-	local lastFlingMurderState = false
-	local lastFlingSheriffState = false
-	local originalCF = nil
+-- Target Fling execution with velocity/fling detection and zero-velocity return TP[cite: 3]
+local ToggleControls_Ref = {} -- Forward declaration for toggles reference
 
-	while true do
-		task.wait(0.1)
-		
-		local murderTriggered = CFG.FlingMurder and not lastFlingMurderState
-		local sheriffTriggered = CFG.FlingSheriff and not lastFlingSheriffState
-		
-		lastFlingMurderState = CFG.FlingMurder
-		lastFlingSheriffState = CFG.FlingSheriff
+local function runTargetFling(targetRole)
+	local char = LocalPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not hum then return end
 
-		if CFG.FlingMurder or CFG.FlingSheriff then
-			local char = LocalPlayer.Character
-			local hrp = char and char:FindFirstChild("HumanoidRootPart")
-			local hum = char and char:FindFirstChildOfClass("Humanoid")
-			
-			if hrp and hum and hum.Health > 0 then
-				if (murderTriggered or sheriffTriggered) or not originalCF then
-					originalCF = hrp.CFrame
-				end
+	-- Capture the exact pre-fling starting position upon activation
+	if not flingActivationPos then
+		flingActivationPos = hrp.CFrame
+	end
 
-				for _, player in ipairs(Players:GetPlayers()) do
-					if player ~= LocalPlayer then
-						local role = detectRole(player)
-						local shouldFling = (CFG.FlingMurder and role == "Murderer") or (CFG.FlingSheriff and role == "Sheriff")
-						
-						if shouldFling then
-							local targetChar = player.Character
-							local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
-							local targetHum = targetChar and targetChar:FindFirstChildOfClass("Humanoid")
-							
-							if targetHrp and targetHum and targetHum.Health > 0 then
-								for _, part in ipairs(char:GetDescendants()) do
-									if part:IsA("BasePart") then part.CanCollide = false end
-								end
+	local targetFound = false
 
-								local startTime = tick()
-								while tick() - startTime < 0.3 do
-									if not targetHrp or not targetHrp.Parent or not hrp.Parent then break end
-									hrp.CFrame = targetHrp.CFrame
-									hrp.AssemblyLinearVelocity = Vector3.new(30000, 30000, 30000)
-									hrp.AssemblyAngularVelocity = Vector3.new(99999, 99999, 99999)
-									RunService.Heartbeat:Wait()
-								end
-
-								if hrp and hrp.Parent and originalCF then
-									hrp.CFrame = originalCF
-									hrp.AssemblyLinearVelocity = Vector3.zero
-									hrp.AssemblyAngularVelocity = Vector3.zero
-								end
-							end
-						end
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer then
+			local role = detectRole(player)
+			if role == targetRole then
+				local targetChar = player.Character
+				local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+				if targetHrp then
+					targetFound = true
+					hrp.CanCollide = false
+					hum.PlatformStand = true
+					
+					-- 1. Smooth travel toward target (keeping local player velocity zero)
+					local steps = 20
+					local startCF = hrp.CFrame
+					for i = 1, steps do
+						if not hrp or not hrp.Parent then break end
+						local alpha = i / steps
+						hrp.CFrame = startCF:Lerp(targetHrp.CFrame, alpha)
+						hrp.AssemblyLinearVelocity = Vector3.zero
+						task.wait(0.015)
 					end
+
+					-- 2. Extended Dwell / Apply Fling Force & Detect when target is successfully flung
+					local flingStartTick = tick()
+					local maxFlingTime = 1.8 -- Increased duration to stay on the player longer
+					local flungSuccessfully = false
+
+					while tick() - flingStartTick < maxFlingTime do
+						if not hrp or not hrp.Parent or not targetHrp or not targetHrp.Parent then break end
+						
+						-- Keep locked on target for physics impact
+						hrp.CFrame = targetHrp.CFrame
+						hrp.AssemblyLinearVelocity = Vector3.zero
+						
+						-- Apply massive fling force to target
+						targetHrp.AssemblyLinearVelocity = Vector3.new(85000, 85000, 85000)
+						targetHrp.AssemblyAngularVelocity = Vector3.new(60000, 60000, 60000)
+
+						-- DETECTION: Check if target's velocity spiked or if they flew away
+						if targetHrp.AssemblyLinearVelocity.Magnitude > 10000 or (targetHrp.Position - hrp.Position).Magnitude > 15 then
+							flungSuccessfully = true
+							-- Let it linger briefly after detection to ensure complete separation
+							task.wait(0.5)
+							break
+						end
+
+						RunService.Heartbeat:Wait()
+					end
+
+					break
 				end
 			end
-		else
-			originalCF = nil
+		end
+	end
+
+	-- 3. Teleport back instantly to the saved start position with absolute zero velocity
+	if flingActivationPos then
+		local currentHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		local currentHum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if currentHrp then
+			currentHrp.AssemblyLinearVelocity = Vector3.zero
+			currentHrp.AssemblyAngularVelocity = Vector3.zero
+			currentHrp.CFrame = flingActivationPos
+			currentHrp.CanCollide = true
+			currentHrp.AssemblyLinearVelocity = Vector3.zero
+			currentHrp.AssemblyAngularVelocity = Vector3.zero
+		end
+		if currentHum then
+			currentHum.PlatformStand = false
+			currentHum:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end
+		
+		-- Reset toggle switches off automatically after execution
+		CFG.FlingMurder = false
+		CFG.FlingSheriff = false
+		if ToggleControls_Ref["flingMurder"] then ToggleControls_Ref["flingMurder"].set(false) end
+		if ToggleControls_Ref["flingSheriff"] then ToggleControls_Ref["flingSheriff"].set(false) end
+		
+		flingActivationPos = nil
+	end
+end
+
+-- Murderer Fling loop[cite: 3]
+task.spawn(function()
+	while true do
+		task.wait(0.2)
+		if CFG.FlingMurder then
+			pcall(function()
+				runTargetFling("Murderer")
+			end)
+		end
+	end
+end)
+
+-- Sheriff Fling loop[cite: 3]
+task.spawn(function()
+	while true do
+		task.wait(0.2)
+		if CFG.FlingSheriff then
+			pcall(function()
+				runTargetFling("Sheriff")
+			end)
 		end
 	end
 end)
@@ -389,6 +448,7 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 	if CFG.NoclipEnabled then SetNoclip(true) end
 	if CFG.SpeedEnabled then StartSpeed() end
 	if CFG.WalkFlingEnabled then StartWalkFling() end
+	flingActivationPos = nil
 end)
 
 ------------------------------------------------------------------
@@ -1021,6 +1081,7 @@ pcall(function()
 				roundEnd.OnClientEvent:Connect(function()
 					table.clear(roleCache)
 					table.clear(handledGunDrops)
+					flingActivationPos = nil
 				end)
 			end
 		end
@@ -1092,6 +1153,8 @@ local FREDOKA = Font.fromEnum(Enum.Font.FredokaOne)
 local LUCKY = Font.fromEnum(Enum.Font.LuckiestGuy)
 local OPEN_KEY = Enum.KeyCode.RightShift
 local Settings, ToggleControls = {}, {}
+ToggleControls_Ref = ToggleControls
+
 local S = {
 	ESPKey = Enum.KeyCode.R,
 	BoxKey = Enum.KeyCode.B,
@@ -1142,8 +1205,10 @@ local function onChanged(name, value)
 		end
 	elseif name == "autoTakeGun" then CFG.autoTakeGun = value
 	elseif name == "autoFarmCoins" then CFG.autoFarmCoins = value
-	elseif name == "flingMurder" then CFG.FlingMurder = value
-	elseif name == "flingSheriff" then CFG.FlingSheriff = value
+	elseif name == "flingMurder" then 
+		CFG.FlingMurder = value 
+	elseif name == "flingSheriff" then 
+		CFG.FlingSheriff = value 
 	elseif name == "maxDistance" then CFG.maxDistance = math.floor(200 + value * 2800 + 0.5)
 	elseif name == "fly" then
 		CFG.FlyEnabled = value
