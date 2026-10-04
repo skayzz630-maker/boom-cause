@@ -1,5 +1,5 @@
 --[[
-	DIH SCRIPT – MM2 (Fully Fixed & Unified Shortcut Hub System)[cite: 4]
+	DIH SCRIPT – MM2 (Fully Fixed & Unified Shortcut Hub System with Advanced Anti-Fling)[cite: 4, 10, 11]
 ]]
 
 local Players           = game:GetService("Players")
@@ -57,6 +57,7 @@ local CFG = {
 	WalkSpeed = 50,
 	NoclipEnabled = false,
 	WalkFlingEnabled = false,
+	AntiFlingEnabled = false,
 	FlingMurder = false,
 	FlingSheriff = false,
 }
@@ -226,7 +227,7 @@ local function UpdateFly()
 end
 
 ------------------------------------------------------------------
--- NOCLIP / SPEED / WALKFLING
+-- NOCLIP / SPEED / WALKFLING / ADVANCED ANTI-FLING
 ------------------------------------------------------------------
 local function SetNoclip(state)
 	if NoclipConnection then NoclipConnection:Disconnect() NoclipConnection = nil end
@@ -239,6 +240,110 @@ local function SetNoclip(state)
 			end
 		end)
 	end
+end
+
+local antiFlingConnections = {}
+
+local function SetAntiFling(state)
+	for _, conn in ipairs(antiFlingConnections) do
+		pcall(function() conn:Disconnect() end)
+	end
+	table.clear(antiFlingConnections)
+
+	if not state then return end
+
+	local function PlayerAdded(Player)
+		if Player == LocalPlayer then return end
+		local Detected = false
+		local Character;
+		local PrimaryPart;
+
+		local function CharacterAdded(NewCharacter)
+			Character = NewCharacter
+			repeat
+				RunService.Heartbeat:Wait()
+				PrimaryPart = NewCharacter:FindFirstChild("HumanoidRootPart")
+			until PrimaryPart or not CFG.AntiFlingEnabled
+			Detected = false
+		end
+
+		if Player.Character then
+			task.spawn(function() CharacterAdded(Player.Character) end)
+		end
+		table.insert(antiFlingConnections, Player.CharacterAdded:Connect(CharacterAdded))
+
+		table.insert(antiFlingConnections, RunService.Heartbeat:Connect(function()
+			if not CFG.AntiFlingEnabled then return end
+			if (Character and Character:IsDescendantOf(workspace)) and (PrimaryPart and PrimaryPart:IsDescendantOf(Character)) then
+				if PrimaryPart.AssemblyAngularVelocity.Magnitude > 50 or PrimaryPart.AssemblyLinearVelocity.Magnitude > 100 then
+					if Detected == false then
+						local succes, result = pcall(function()
+							game.StarterGui:SetCore("ChatMakeSystemMessage", {
+								Text = "Fling Exploit detected, Player: " .. tostring(Player);
+								Color = Color3.fromRGB(255, 200, 0);
+							})
+						end)
+						if not succes then
+							pcall(function()
+								game:GetService("TextChatService").TextChannels.RBXGeneral:DisplaySystemMessage("{System}: Fling Exploit detected, Player: " .. tostring(Player))
+							end)
+						end
+					end
+					Detected = true
+					for _, v in ipairs(Character:GetDescendants()) do
+						if v:IsA("BasePart") then
+							v.CanCollide = false
+							v.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+							v.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+							v.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0)
+						end
+					end
+					PrimaryPart.CanCollide = false
+					PrimaryPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+					PrimaryPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+					PrimaryPart.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0)
+				end
+			end
+		end))
+	end
+
+	for _, v in ipairs(Players:GetPlayers()) do
+		if v ~= LocalPlayer then
+			PlayerAdded(v)
+		end
+	end
+	table.insert(antiFlingConnections, Players.PlayerAdded:Connect(PlayerAdded))
+
+	local LastPosition = nil
+	table.insert(antiFlingConnections, RunService.Heartbeat:Connect(function()
+		if not CFG.AntiFlingEnabled then return end
+		pcall(function()
+			local char = LocalPlayer.Character
+			local PrimaryPart = char and char.PrimaryPart
+			if not PrimaryPart then return end
+			if PrimaryPart.AssemblyLinearVelocity.Magnitude > 250 or PrimaryPart.AssemblyAngularVelocity.Magnitude > 250 then
+				PrimaryPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+				PrimaryPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+				if LastPosition then
+					PrimaryPart.CFrame = LastPosition
+				end
+
+				local succes1, result1 = pcall(function()
+					game.StarterGui:SetCore("ChatMakeSystemMessage", {
+						Text = "You were flung. Neutralizing velocity.";
+						Color = Color3.fromRGB(255, 0, 0);
+					})
+				end)
+				if not succes1 then
+					pcall(function()
+						game:GetService("TextChatService").TextChannels.RBXGeneral:DisplaySystemMessage("{System}: You were flung. Neutralizing velocity.")
+					end)
+				end
+			elseif PrimaryPart.AssemblyLinearVelocity.Magnitude < 50 or PrimaryPart.AssemblyAngularVelocity.Magnitude > 50 then
+				LastPosition = PrimaryPart.CFrame
+			end
+		end)
+	end))
 end
 
 local function StopSpeed()
@@ -476,6 +581,7 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 	if hum then DefaultWalkSpeed = hum.WalkSpeed end
 	if CFG.FlyEnabled then StartFly() end
 	if CFG.NoclipEnabled then SetNoclip(true) end
+	if CFG.AntiFlingEnabled then SetAntiFling(true) end
 	if CFG.SpeedEnabled then StartSpeed() end
 	if CFG.WalkFlingEnabled then StartWalkFling() end
 end)
@@ -1167,6 +1273,7 @@ local S = {
 	speed = Enum.KeyCode.V,
 	noclip = Enum.KeyCode.C,
 	walkFling = Enum.KeyCode.Y,
+	antiFling = Enum.KeyCode.Z,
 	flingMurder = Enum.KeyCode.T,
 	flingSheriff = Enum.KeyCode.X,
 }
@@ -1187,6 +1294,7 @@ local keyMap = {
 	speed_key = "speed",
 	noclip_key = "noclip",
 	walkFling_key = "walkFling",
+	antiFling_key = "antiFling",
 	flingMurder_key = "flingMurder",
 	flingSheriff_key = "flingSheriff",
 }
@@ -1227,6 +1335,9 @@ local function onChanged(name, value)
 	elseif name == "noclip" then
 		CFG.NoclipEnabled = value
 		SetNoclip(value)
+	elseif name == "antiFling" then
+		CFG.AntiFlingEnabled = value
+		SetAntiFling(value)
 	elseif name == "walkFling" then
 		CFG.WalkFlingEnabled = value
 		if value then StartWalkFling() else StopWalkFling() end
@@ -1455,7 +1566,7 @@ for _, d in ipairs(tabDefs) do
 	end)
 
 	local page = Instance.new("Frame")
-	page.Size = UDim2.fromOffset(448, 1000)
+	page.Size = UDim2.fromOffset(448, 1250)
 	page.BackgroundTransparency = 1
 	page.Position = UDim2.fromOffset(0, -VIEW_TOP)
 	page.Visible = false
@@ -1464,7 +1575,7 @@ for _, d in ipairs(tabDefs) do
 end
 
 local TRACK_Y, TRACK_H, THUMB_H = 132, 450, 240
-local MAX_SCROLL = 450
+local MAX_SCROLL = 650
 local scrollA, targetA, shownA = 0, 0, 0
 local track = frame(main, 433, TRACK_Y, 8, TRACK_H, C.white, 1, 4)
 local thumb = frame(main, 433, TRACK_Y, 8, THUMB_H, C.white, 0.5, 4)
@@ -1689,14 +1800,18 @@ do
 	keyBox(p, "walkFling_key", 200, 816, Enum.KeyCode.Y)
 	toggle(p, "walkFling", 320, 816, 75, false)
 
-	lbl(p, "max distance", 21, 885, 250, 28, C.gray)
-	slider(p, "maxDistance", 20, 930, math.clamp((CFG.maxDistance - 200) / 2800, 0, 1))
+	lbl(p, "Anti Fling", 21, 880, 200, 33)
+	keyBox(p, "antiFling_key", 200, 876, Enum.KeyCode.Z)
+	toggle(p, "antiFling", 320, 876, 75, false)
 
-	lbl(p, "Fly speed", 21, 980, 200, 28, C.gray)
-	slider(p, "flySpeed", 20, 1025, math.clamp((CFG.FlySpeed - 10) / 190, 0, 1))
+	lbl(p, "max distance", 21, 945, 250, 28, C.gray)
+	slider(p, "maxDistance", 20, 990, math.clamp((CFG.maxDistance - 200) / 2800, 0, 1))
 
-	lbl(p, "Walk Speed", 21, 1075, 200, 28, C.gray)
-	slider(p, "walkSpeed", 20, 1120, math.clamp((CFG.WalkSpeed - 16) / 184, 0, 1))
+	lbl(p, "Fly speed", 21, 1040, 200, 28, C.gray)
+	slider(p, "flySpeed", 20, 1085, math.clamp((CFG.FlySpeed - 10) / 190, 0, 1))
+
+	lbl(p, "Walk Speed", 21, 1135, 200, 28, C.gray)
+	slider(p, "walkSpeed", 20, 1180, math.clamp((CFG.WalkSpeed - 16) / 184, 0, 1))
 end
 
 showPage("INNOCENT")
