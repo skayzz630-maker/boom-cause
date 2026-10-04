@@ -1,5 +1,5 @@
 --[[
-	DIH SCRIPT – MM2 (Fling Detection & Zero-Velocity Return TP)
+	DIH SCRIPT – MM2 (Fixed Fling System with Smart Target Waiting, Fly, ESP, Coin Farm, & Gun Auto-Take)
 ]]
 
 local Players           = game:GetService("Players")
@@ -71,11 +71,8 @@ local FlyBV, FlyBG, FlyAnimTrack = nil, nil, nil
 local NoclipConnection, SpeedConnection, WalkFlingConnection = nil, nil, nil
 local DefaultWalkSpeed = 16
 
--- Saved position for Fling Return
-local flingActivationPos = nil
-
 ------------------------------------------------------------------
--- ROLE
+-- ROLE DETECTION
 ------------------------------------------------------------------
 local function hasTool(player, toolName)
 	local char = player.Character
@@ -105,9 +102,17 @@ local function pollRolesFromServer()
 end
 
 local function detectRole(player)
-	if roleCache[player] then return roleCache[player] end
-	if hasTool(player, "Knife") then roleCache[player] = "Murderer" return "Murderer" end
-	if hasTool(player, "Gun") then roleCache[player] = "Sheriff" return "Sheriff" end
+	if hasTool(player, "Knife") then 
+		roleCache[player] = "Murderer" 
+		return "Murderer" 
+	end
+	if hasTool(player, "Gun") then 
+		roleCache[player] = "Sheriff" 
+		return "Sheriff" 
+	end
+	if roleCache[player] and roleCache[player] ~= "Unknown" then 
+		return roleCache[player] 
+	end
 	return "Innocent"
 end
 
@@ -268,11 +273,13 @@ local function ApplyWalkSpeed()
 end
 
 ------------------------------------------------------------------
--- WALKFLING & TARGET FLING (WITH DETECTION & ZERO-VELOCITY RETURN)
+-- WALKFLING & ROBUST TARGET FLING SYSTEM (VOL + FLING + RETP)
 ------------------------------------------------------------------
 local walkflinging = false
+local targetFlingActive = false
 local WalkFlingJumpConn = nil
 local WalkFlingDiedConn = nil
+local ToggleControls_Ref = {}
 
 local function StopWalkFling()
 	walkflinging = false
@@ -308,134 +315,167 @@ local function StartWalkFling()
 		repeat 
 			RunService.Heartbeat:Wait()
 			if not Root or not Root.Parent then break end
-			local vel = Root.Velocity
-			Root.Velocity = vel * 10000 + Vector3.new(0, 10000, 0)
-			RunService.RenderStepped:Wait()
-			Root.Velocity = vel
-			RunService.Stepped:Wait()
-			Root.Velocity = vel + Vector3.new(0, 0.1, 0)
+			if not targetFlingActive then
+				local vel = Root.Velocity
+				Root.Velocity = vel * 10000 + Vector3.new(0, 10000, 0)
+				RunService.RenderStepped:Wait()
+				if not targetFlingActive then
+					Root.Velocity = vel
+					RunService.Stepped:Wait()
+					Root.Velocity = vel + Vector3.new(0, 0.1, 0)
+				end
+			end
 		until walkflinging == false or CFG.WalkFlingEnabled == false
 	end)
 end
 
--- Target Fling execution with velocity/fling detection and zero-velocity return TP[cite: 3]
-local ToggleControls_Ref = {} -- Forward declaration for toggles reference
-
+-- [ROBUST FIX] Fonction Fling Cible avec recherche intelligente et attente active
 local function runTargetFling(targetRole)
+	if targetFlingActive then return end
+	targetFlingActive = true
+
 	local char = LocalPlayer.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if not hrp or not hum then return end
-
-	-- Capture the exact pre-fling starting position upon activation
-	if not flingActivationPos then
-		flingActivationPos = hrp.CFrame
+	if not hrp or not hum or hum.Health <= 0 then 
+		targetFlingActive = false
+		return 
 	end
 
-	local targetFound = false
-
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LocalPlayer then
-			local role = detectRole(player)
-			if role == targetRole then
-				local targetChar = player.Character
-				local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
-				if targetHrp then
-					targetFound = true
-					hrp.CanCollide = false
-					hum.PlatformStand = true
-					
-					-- 1. Smooth travel toward target (keeping local player velocity zero)
-					local steps = 20
-					local startCF = hrp.CFrame
-					for i = 1, steps do
-						if not hrp or not hrp.Parent then break end
-						local alpha = i / steps
-						hrp.CFrame = startCF:Lerp(targetHrp.CFrame, alpha)
-						hrp.AssemblyLinearVelocity = Vector3.zero
-						task.wait(0.015)
+	-- Recherche active de la cible (attend jusqu'à 6 secondes si le rôle n'est pas encore visible)
+	local targetHrp = nil
+	local searchStart = tick()
+	while not targetHrp and (tick() - searchStart < 6) do
+		pollRolesFromServer()
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer then
+				local role = detectRole(player)
+				if role == targetRole then
+					local targetChar = player.Character
+					local tHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+					local tHum = targetChar and targetChar:FindFirstChildOfClass("Humanoid")
+					if tHrp and tHum and tHum.Health > 0 then
+						targetHrp = tHrp
+						break
 					end
-
-					-- 2. Extended Dwell / Apply Fling Force & Detect when target is successfully flung
-					local flingStartTick = tick()
-					local maxFlingTime = 1.8 -- Increased duration to stay on the player longer
-					local flungSuccessfully = false
-
-					while tick() - flingStartTick < maxFlingTime do
-						if not hrp or not hrp.Parent or not targetHrp or not targetHrp.Parent then break end
-						
-						-- Keep locked on target for physics impact
-						hrp.CFrame = targetHrp.CFrame
-						hrp.AssemblyLinearVelocity = Vector3.zero
-						
-						-- Apply massive fling force to target
-						targetHrp.AssemblyLinearVelocity = Vector3.new(85000, 85000, 85000)
-						targetHrp.AssemblyAngularVelocity = Vector3.new(60000, 60000, 60000)
-
-						-- DETECTION: Check if target's velocity spiked or if they flew away
-						if targetHrp.AssemblyLinearVelocity.Magnitude > 10000 or (targetHrp.Position - hrp.Position).Magnitude > 15 then
-							flungSuccessfully = true
-							-- Let it linger briefly after detection to ensure complete separation
-							task.wait(0.5)
-							break
-						end
-
-						RunService.Heartbeat:Wait()
-					end
-
-					break
 				end
 			end
 		end
+		if not targetHrp then
+			task.wait(0.3)
+			-- Vérifier si l'utilisateur a désactivé le bouton pendant l'attente
+			local activeFlag = (targetRole == "Murderer" and CFG.FlingMurder) or (targetRole == "Sheriff" and CFG.FlingSheriff)
+			if not activeFlag then break end
+		end
 	end
 
-	-- 3. Teleport back instantly to the saved start position with absolute zero velocity
-	if flingActivationPos then
-		local currentHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-		local currentHum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-		if currentHrp then
-			currentHrp.AssemblyLinearVelocity = Vector3.zero
-			currentHrp.AssemblyAngularVelocity = Vector3.zero
-			currentHrp.CFrame = flingActivationPos
-			currentHrp.CanCollide = true
-			currentHrp.AssemblyLinearVelocity = Vector3.zero
-			currentHrp.AssemblyAngularVelocity = Vector3.zero
-		end
-		if currentHum then
-			currentHum.PlatformStand = false
-			currentHum:ChangeState(Enum.HumanoidStateType.GettingUp)
-		end
-		
-		-- Reset toggle switches off automatically after execution
+	-- Si aucune cible n'est trouvée après le délai, on annule proprement sans bloquer
+	if not targetHrp then
+		targetFlingActive = false
 		CFG.FlingMurder = false
 		CFG.FlingSheriff = false
 		if ToggleControls_Ref["flingMurder"] then ToggleControls_Ref["flingMurder"].set(false) end
 		if ToggleControls_Ref["flingSheriff"] then ToggleControls_Ref["flingSheriff"].set(false) end
-		
-		flingActivationPos = nil
+		return
 	end
+
+	-- Sauvegarde de la position d'origine pour le Retp ultérieur
+	local originalPos = hrp.CFrame
+	hum.PlatformStand = true
+
+	-- Désactivation temporaire des collisions du personnage local
+	local colliders = {}
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			colliders[part] = part.CanCollide
+			part.CanCollide = false
+		end
+	end
+	hrp.CanCollide = true
+
+	-- Étape 1 : Vol fluide vers la direction du joueur cible
+	local approachConnection
+	approachConnection = RunService.Heartbeat:Connect(function()
+		if not hrp or not hrp.Parent or not targetHrp or not targetHrp.Parent then return end
+		local targetPos = targetHrp.Position
+		local direction = (targetPos - hrp.Position)
+		if direction.Magnitude > 3 then
+			hrp.AssemblyLinearVelocity = direction.Unit * 200
+			hrp.CFrame = CFrame.lookAt(hrp.Position, targetPos)
+		else
+			hrp.AssemblyLinearVelocity = Vector3.zero
+		end
+	end)
+
+	task.wait(0.8) -- Durée du vol d'approche
+	if approachConnection then approachConnection:Disconnect() end
+
+	-- Étape 2 : Exécution du Fling intense et agressif au contact de la cible
+	local flingConnection
+	flingConnection = RunService.Heartbeat:Connect(function()
+		if not hrp or not hrp.Parent or not targetHrp or not targetHrp.Parent or hum.Health <= 0 then return end
+		local tPos = targetHrp.Position
+		hrp.CFrame = CFrame.new(tPos + Vector3.new(0, 0.2, 0)) * CFrame.Angles(math.random(), math.random(), math.random())
+		hrp.AssemblyLinearVelocity = Vector3.new(math.random(-3000, 3000), 75000, math.random(-3000, 3000))
+		hrp.AssemblyAngularVelocity = Vector3.new(75000, 75000, 75000)
+	end)
+
+	task.wait(0.9) -- Durée du fling
+	if flingConnection then flingConnection:Disconnect() end
+
+	-- Étape 3 : Téléportation de retour (Retp) à la position initiale
+	local currentChar = LocalPlayer.Character
+	local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+	local currentHum = currentChar and currentChar:FindFirstChildOfClass("Humanoid")
+	
+	if currentHrp then
+		currentHrp.Anchored = true
+		currentHrp.AssemblyLinearVelocity = Vector3.zero
+		currentHrp.AssemblyAngularVelocity = Vector3.zero
+		currentHrp.CFrame = originalPos
+		
+		task.wait(0.05)
+		
+		currentHrp.Anchored = false
+		currentHrp.AssemblyLinearVelocity = Vector3.zero
+		currentHrp.AssemblyAngularVelocity = Vector3.zero
+	end
+	
+	if currentHum then
+		currentHum.PlatformStand = false
+		currentHum:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end
+
+	-- Restauration des collisions d'origine
+	if currentChar then
+		for _, part in ipairs(currentChar:GetDescendants()) do
+			if part:IsA("BasePart") and colliders[part] ~= nil then
+				part.CanCollide = colliders[part]
+			end
+		end
+	end
+
+	CFG.FlingMurder = false
+	CFG.FlingSheriff = false
+	if ToggleControls_Ref["flingMurder"] then ToggleControls_Ref["flingMurder"].set(false) end
+	if ToggleControls_Ref["flingSheriff"] then ToggleControls_Ref["flingSheriff"].set(false) end
+	targetFlingActive = false
 end
 
--- Murderer Fling loop[cite: 3]
 task.spawn(function()
 	while true do
 		task.wait(0.2)
 		if CFG.FlingMurder then
-			pcall(function()
-				runTargetFling("Murderer")
-			end)
+			pcall(function() runTargetFling("Murderer") end)
 		end
 	end
 end)
 
--- Sheriff Fling loop[cite: 3]
 task.spawn(function()
 	while true do
 		task.wait(0.2)
 		if CFG.FlingSheriff then
-			pcall(function()
-				runTargetFling("Sheriff")
-			end)
+			pcall(function() runTargetFling("Sheriff") end)
 		end
 	end
 end)
@@ -448,11 +488,10 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 	if CFG.NoclipEnabled then SetNoclip(true) end
 	if CFG.SpeedEnabled then StartSpeed() end
 	if CFG.WalkFlingEnabled then StartWalkFling() end
-	flingActivationPos = nil
 end)
 
 ------------------------------------------------------------------
--- DRAWING
+-- DRAWING & ESP
 ------------------------------------------------------------------
 local function worldToScreen(worldPos)
 	if not Camera then return nil end
@@ -643,7 +682,7 @@ local function update3DBody(entry, char, col)
 end
 
 ------------------------------------------------------------------
--- AUTO TAKE GUN
+-- AUTO TAKE GUN & COIN FARM
 ------------------------------------------------------------------
 local function canTakeGun()
 	if detectRole(LocalPlayer) == "Murderer" then return false end
@@ -676,9 +715,6 @@ local function tryAutoTakeGun(gun)
 	autoTakeBusy = false
 end
 
-------------------------------------------------------------------
--- GUN DROP ESP
-------------------------------------------------------------------
 local function createGunESP()
 	local e = {}
 	e.box = Drawing.new("Square")
@@ -978,10 +1014,6 @@ local function render()
 			continue
 		end
 		local role = detectRole(player)
-		if role == "Innocent" or role == "Unknown" then
-			if hasTool(player, "Knife") then role = "Murderer" roleCache[player] = role
-			elseif hasTool(player, "Gun") then role = "Sheriff" roleCache[player] = role end
-		end
 		local col = roleColor(role)
 		local entry = espMap[player]
 		if not entry then entry = createESP() espMap[player] = entry end
@@ -1081,36 +1113,9 @@ pcall(function()
 				roundEnd.OnClientEvent:Connect(function()
 					table.clear(roleCache)
 					table.clear(handledGunDrops)
-					flingActivationPos = nil
 				end)
 			end
 		end
-	end
-end)
-
-pcall(function()
-	local upd = ReplicatedStorage:FindFirstChild("UpdatePlayerData")
-	if upd then
-		upd.OnClientEvent:Connect(function(data)
-			if type(data) ~= "table" then return end
-			for name, info in pairs(data) do
-				local plr = Players:FindFirstChild(name)
-				if plr and type(info) == "table" and info.Role then roleCache[plr] = info.Role end
-			end
-		end)
-	end
-end)
-
-pcall(function()
-	local fade = ReplicatedStorage:FindFirstChild("Fade")
-	if fade then
-		fade.OnClientEvent:Connect(function(data)
-			if type(data) ~= "table" then return end
-			for name, info in pairs(data) do
-				local plr = Players:FindFirstChild(name)
-				if plr and type(info) == "table" and info.Role then roleCache[plr] = info.Role end
-			end
-		end)
 	end
 end)
 
@@ -1126,7 +1131,7 @@ RunService.RenderStepped:Connect(function()
 end)
 
 ------------------------------------------------------------------
--- HUB
+-- HUB UI SETUP
 ------------------------------------------------------------------
 local C = {
 	titleBar = Color3.fromRGB(161, 125, 170),
@@ -1152,7 +1157,8 @@ local WINDOW_GRADIENT = ColorSequence.new({
 local FREDOKA = Font.fromEnum(Enum.Font.FredokaOne)
 local LUCKY = Font.fromEnum(Enum.Font.LuckiestGuy)
 local OPEN_KEY = Enum.KeyCode.RightShift
-local Settings, ToggleControls = {}, {}
+local Settings = {}
+local ToggleControls = {}
 ToggleControls_Ref = ToggleControls
 
 local S = {
@@ -1174,12 +1180,6 @@ local S = {
 	FlingMurderKey = Enum.KeyCode.T,
 	FlingSheriffKey = Enum.KeyCode.X,
 }
-
-local function KeyNameToEnum(name)
-	if typeof(name) ~= "string" then return nil end
-	local ok, e = pcall(function() return Enum.KeyCode[name] end)
-	return (ok and e) or nil
-end
 
 local function MapFly(a) return math.floor(10 + a * 190 + 0.5) end
 local function MapWalk(a) return math.floor(16 + a * 184 + 0.5) end
@@ -1205,10 +1205,8 @@ local function onChanged(name, value)
 		end
 	elseif name == "autoTakeGun" then CFG.autoTakeGun = value
 	elseif name == "autoFarmCoins" then CFG.autoFarmCoins = value
-	elseif name == "flingMurder" then 
-		CFG.FlingMurder = value 
-	elseif name == "flingSheriff" then 
-		CFG.FlingSheriff = value 
+	elseif name == "flingMurder" then CFG.FlingMurder = value 
+	elseif name == "flingSheriff" then CFG.FlingSheriff = value 
 	elseif name == "maxDistance" then CFG.maxDistance = math.floor(200 + value * 2800 + 0.5)
 	elseif name == "fly" then
 		CFG.FlyEnabled = value
@@ -1226,23 +1224,6 @@ local function onChanged(name, value)
 	elseif name == "walkSpeed" then
 		CFG.WalkSpeed = MapWalk(value)
 		if CFG.SpeedEnabled then ApplyWalkSpeed() end
-	elseif name == "esp_key" then local e = KeyNameToEnum(value) if e then S.ESPKey = e end
-	elseif name == "box_key" then local e = KeyNameToEnum(value) if e then S.BoxKey = e end
-	elseif name == "skeleton_key" then local e = KeyNameToEnum(value) if e then S.SkeletonKey = e end
-	elseif name == "highlight_key" then local e = KeyNameToEnum(value) if e then S.HighlightKey = e end
-	elseif name == "label_key" then local e = KeyNameToEnum(value) if e then S.LabelKey = e end
-	elseif name == "role_key" then local e = KeyNameToEnum(value) if e then S.RoleKey = e end
-	elseif name == "distance_key" then local e = KeyNameToEnum(value) if e then S.DistKey = e end
-	elseif name == "body3d_key" then local e = KeyNameToEnum(value) if e then S.Body3DKey = e end
-	elseif name == "gun_key" then local e = KeyNameToEnum(value) if e then S.GunKey = e end
-	elseif name == "autoTake_key" then local e = KeyNameToEnum(value) if e then S.AutoTakeKey = e end
-	elseif name == "fly_key" then local e = KeyNameToEnum(value) if e then S.FlyKey = e end
-	elseif name == "speed_key" then local e = KeyNameToEnum(value) if e then S.SpeedKey = e end
-	elseif name == "noclip_key" then local e = KeyNameToEnum(value) if e then S.NoclipKey = e end
-	elseif name == "coinFarm_key" then local e = KeyNameToEnum(value) if e then S.CoinFarmKey = e end
-	elseif name == "walkFling_key" then local e = KeyNameToEnum(value) if e then S.WalkFlingKey = e end
-	elseif name == "flingMurder_key" then local e = KeyNameToEnum(value) if e then S.FlingMurderKey = e end
-	elseif name == "flingSheriff_key" then local e = KeyNameToEnum(value) if e then S.FlingSheriffKey = e end
 	end
 end
 
@@ -1566,7 +1547,6 @@ local function keyBox(page, key, x, y, defaultKey)
 	s.Color = C.black
 	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
 	s.Parent = b
-	onChanged(key, defaultKey)
 	b.MouseButton1Click:Connect(function()
 		b.Text = "..."
 		local conn
@@ -1574,7 +1554,6 @@ local function keyBox(page, key, x, y, defaultKey)
 			if i.UserInputType == Enum.UserInputType.Keyboard then
 				Settings[key] = i.KeyCode.Name
 				b.Text = i.KeyCode.Name
-				onChanged(key, i.KeyCode.Name)
 				conn:Disconnect()
 			end
 		end)
@@ -1757,7 +1736,6 @@ UIS.InputBegan:Connect(function(input, processed)
 	elseif input.KeyCode == S.FlyKey then flip("fly")
 	elseif input.KeyCode == S.SpeedKey then flip("speed")
 	elseif input.KeyCode == S.NoclipKey then flip("noclip")
-	elseif input.KeyCode == S.CoinFarmKey then flip("autoFarmCoins")
 	elseif input.KeyCode == S.WalkFlingKey then flip("walkFling")
 	elseif input.KeyCode == S.FlingMurderKey then flip("flingMurder")
 	elseif input.KeyCode == S.FlingSheriffKey then flip("flingSheriff")
