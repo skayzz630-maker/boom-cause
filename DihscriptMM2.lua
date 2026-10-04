@@ -1,5 +1,5 @@
 --[[
-	DIH SCRIPT – MM2 (Fixed Fling System with Smart Target Waiting, Fly, ESP, Coin Farm, & Gun Auto-Take)
+	DIH SCRIPT – MM2 (Fully Fixed & Unified Shortcut Hub System)[cite: 4]
 ]]
 
 local Players           = game:GetService("Players")
@@ -273,7 +273,7 @@ local function ApplyWalkSpeed()
 end
 
 ------------------------------------------------------------------
--- WALKFLING & ROBUST TARGET FLING SYSTEM (VOL + FLING + RETP)
+-- WALKFLING & ROBUST TARGET FLING SYSTEM
 ------------------------------------------------------------------
 local walkflinging = false
 local targetFlingActive = false
@@ -329,7 +329,6 @@ local function StartWalkFling()
 	end)
 end
 
--- [ROBUST FIX] Fonction Fling Cible avec recherche intelligente et attente active
 local function runTargetFling(targetRole)
 	if targetFlingActive then return end
 	targetFlingActive = true
@@ -342,7 +341,6 @@ local function runTargetFling(targetRole)
 		return 
 	end
 
-	-- Recherche active de la cible (attend jusqu'à 6 secondes si le rôle n'est pas encore visible)
 	local targetHrp = nil
 	local searchStart = tick()
 	while not targetHrp and (tick() - searchStart < 6) do
@@ -363,13 +361,11 @@ local function runTargetFling(targetRole)
 		end
 		if not targetHrp then
 			task.wait(0.3)
-			-- Vérifier si l'utilisateur a désactivé le bouton pendant l'attente
 			local activeFlag = (targetRole == "Murderer" and CFG.FlingMurder) or (targetRole == "Sheriff" and CFG.FlingSheriff)
 			if not activeFlag then break end
 		end
 	end
 
-	-- Si aucune cible n'est trouvée après le délai, on annule proprement sans bloquer
 	if not targetHrp then
 		targetFlingActive = false
 		CFG.FlingMurder = false
@@ -379,11 +375,9 @@ local function runTargetFling(targetRole)
 		return
 	end
 
-	-- Sauvegarde de la position d'origine pour le Retp ultérieur
 	local originalPos = hrp.CFrame
 	hum.PlatformStand = true
 
-	-- Désactivation temporaire des collisions du personnage local
 	local colliders = {}
 	for _, part in ipairs(char:GetDescendants()) do
 		if part:IsA("BasePart") then
@@ -393,7 +387,6 @@ local function runTargetFling(targetRole)
 	end
 	hrp.CanCollide = true
 
-	-- Étape 1 : Vol fluide vers la direction du joueur cible
 	local approachConnection
 	approachConnection = RunService.Heartbeat:Connect(function()
 		if not hrp or not hrp.Parent or not targetHrp or not targetHrp.Parent then return end
@@ -407,10 +400,9 @@ local function runTargetFling(targetRole)
 		end
 	end)
 
-	task.wait(0.8) -- Durée du vol d'approche
+	task.wait(0.8)
 	if approachConnection then approachConnection:Disconnect() end
 
-	-- Étape 2 : Exécution du Fling intense et agressif au contact de la cible
 	local flingConnection
 	flingConnection = RunService.Heartbeat:Connect(function()
 		if not hrp or not hrp.Parent or not targetHrp or not targetHrp.Parent or hum.Health <= 0 then return end
@@ -420,10 +412,9 @@ local function runTargetFling(targetRole)
 		hrp.AssemblyAngularVelocity = Vector3.new(75000, 75000, 75000)
 	end)
 
-	task.wait(0.9) -- Durée du fling
+	task.wait(0.9)
 	if flingConnection then flingConnection:Disconnect() end
 
-	-- Étape 3 : Téléportation de retour (Retp) à la position initiale
 	local currentChar = LocalPlayer.Character
 	local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
 	local currentHum = currentChar and currentChar:FindFirstChildOfClass("Humanoid")
@@ -446,7 +437,6 @@ local function runTargetFling(targetRole)
 		currentHum:ChangeState(Enum.HumanoidStateType.GettingUp)
 	end
 
-	-- Restauration des collisions d'origine
 	if currentChar then
 		for _, part in ipairs(currentChar:GetDescendants()) do
 			if part:IsA("BasePart") and colliders[part] ~= nil then
@@ -1157,28 +1147,48 @@ local WINDOW_GRADIENT = ColorSequence.new({
 local FREDOKA = Font.fromEnum(Enum.Font.FredokaOne)
 local LUCKY = Font.fromEnum(Enum.Font.LuckiestGuy)
 local OPEN_KEY = Enum.KeyCode.RightShift
-local Settings = {}
 local ToggleControls = {}
 ToggleControls_Ref = ToggleControls
 
+-- Unified Shortcut Key Map
 local S = {
-	ESPKey = Enum.KeyCode.R,
-	BoxKey = Enum.KeyCode.B,
-	SkeletonKey = Enum.KeyCode.K,
-	HighlightKey = Enum.KeyCode.L,
-	LabelKey = Enum.KeyCode.N,
-	RoleKey = Enum.KeyCode.M,
-	DistKey = Enum.KeyCode.J,
-	Body3DKey = Enum.KeyCode.U,
-	GunKey = Enum.KeyCode.P,
-	AutoTakeKey = Enum.KeyCode.G,
-	FlyKey = Enum.KeyCode.F,
-	SpeedKey = Enum.KeyCode.V,
-	NoclipKey = Enum.KeyCode.C,
-	CoinFarmKey = Enum.KeyCode.H,
-	WalkFlingKey = Enum.KeyCode.Y,
-	FlingMurderKey = Enum.KeyCode.T,
-	FlingSheriffKey = Enum.KeyCode.X,
+	esp = Enum.KeyCode.R,
+	boxEsp = Enum.KeyCode.B,
+	skeletonEsp = Enum.KeyCode.K,
+	highlightEsp = Enum.KeyCode.L,
+	labelEsp = Enum.KeyCode.N,
+	roleEsp = Enum.KeyCode.M,
+	distanceEsp = Enum.KeyCode.J,
+	body3dEsp = Enum.KeyCode.U,
+	gunEsp = Enum.KeyCode.P,
+	autoTakeGun = Enum.KeyCode.G,
+	autoFarmCoins = Enum.KeyCode.H,
+	fly = Enum.KeyCode.F,
+	speed = Enum.KeyCode.V,
+	noclip = Enum.KeyCode.C,
+	walkFling = Enum.KeyCode.Y,
+	flingMurder = Enum.KeyCode.T,
+	flingSheriff = Enum.KeyCode.X,
+}
+
+local keyMap = {
+	esp_key = "esp",
+	box_key = "boxEsp",
+	skeleton_key = "skeletonEsp",
+	highlight_key = "highlightEsp",
+	label_key = "labelEsp",
+	role_key = "roleEsp",
+	distance_key = "distanceEsp",
+	body3d_key = "body3dEsp",
+	gun_key = "gunEsp",
+	autoTake_key = "autoTakeGun",
+	coinFarm_key = "autoFarmCoins",
+	fly_key = "fly",
+	speed_key = "speed",
+	noclip_key = "noclip",
+	walkFling_key = "walkFling",
+	flingMurder_key = "flingMurder",
+	flingSheriff_key = "flingSheriff",
 }
 
 local function MapFly(a) return math.floor(10 + a * 190 + 0.5) end
@@ -1503,39 +1513,42 @@ ContextActionService:BindActionAtPriority("DihMM2Wheel", function()
 end, false, Enum.ContextActionPriority.High.Value, Enum.UserInputType.MouseWheel)
 
 local function toggle(page, key, x, y, w, defaultOn)
-	Settings[key] = defaultOn == true
 	local trackBtn = Instance.new("TextButton")
 	trackBtn.Position = UDim2.fromOffset(x, y)
 	trackBtn.Size = UDim2.fromOffset(w, 36)
-	trackBtn.BackgroundColor3 = Settings[key] and C.trackOn or C.track
+	trackBtn.BackgroundColor3 = defaultOn and C.trackOn or C.track
 	trackBtn.Text = ""
 	trackBtn.AutoButtonColor = false
 	trackBtn.Parent = page
 	corner(trackBtn, 18)
-	local knob = frame(trackBtn, Settings[key] and (w - 36) or 0, 0, 36, 36, C.white, 0, 18)
+	local knob = frame(trackBtn, defaultOn and (w - 36) or 0, 0, 36, 36, C.white, 0, 18)
 	local function apply(state, fire)
-		Settings[key] = state
 		knob:TweenPosition(UDim2.fromOffset(state and (w - 36) or 0, 0), "Out", "Quad", 0.12, true)
 		trackBtn.BackgroundColor3 = state and C.trackOn or C.track
 		if fire then onChanged(key, state) end
 	end
-	trackBtn.MouseButton1Click:Connect(function() apply(not Settings[key], true) end)
+	trackBtn.MouseButton1Click:Connect(function() apply(not (trackBtn.BackgroundColor3 == C.trackOn), true) end)
 	ToggleControls[key] = {
 		set = function(state) apply(state, true) end,
-		toggle = function() apply(not Settings[key], true) end,
+		toggle = function() 
+			local currentState = (trackBtn.BackgroundColor3 == C.trackOn)
+			apply(not currentState, true) 
+		end,
 	}
 	if defaultOn then onChanged(key, true) end
 end
 
-local function keyBox(page, key, x, y, defaultKey)
-	Settings[key] = defaultKey
+local function keyBox(page, uiKeyName, x, y, defaultKeyEnum)
+	local mappedKey = keyMap[uiKeyName] or uiKeyName
+	S[mappedKey] = defaultKeyEnum
+	
 	local b = Instance.new("TextButton")
 	b.Position = UDim2.fromOffset(x, y)
 	b.Size = UDim2.fromOffset(76, 36)
 	b.BackgroundColor3 = C.black
 	b.BackgroundTransparency = 0.8
 	b.AutoButtonColor = false
-	b.Text = defaultKey
+	b.Text = defaultKeyEnum.Name
 	b.FontFace = FREDOKA
 	b.TextSize = 28
 	b.TextColor3 = C.white
@@ -1552,7 +1565,7 @@ local function keyBox(page, key, x, y, defaultKey)
 		local conn
 		conn = UIS.InputBegan:Connect(function(i)
 			if i.UserInputType == Enum.UserInputType.Keyboard then
-				Settings[key] = i.KeyCode.Name
+				S[mappedKey] = i.KeyCode
 				b.Text = i.KeyCode.Name
 				conn:Disconnect()
 			end
@@ -1561,7 +1574,6 @@ local function keyBox(page, key, x, y, defaultKey)
 end
 
 local function slider(page, key, x, y, defaultA)
-	Settings[key] = defaultA
 	local bar = frame(page, x - 5, y - 4, 391, 10, C.track, 0, 5)
 	local fill = frame(bar, 0, 0, 9, 10, C.fill, 0, 5)
 	local knob = frame(bar, 0, 0, 27, 26, C.white, 0, 13)
@@ -1573,7 +1585,6 @@ local function slider(page, key, x, y, defaultA)
 		local kx = 9 + a * (bar.AbsoluteSize.X - 18)
 		knob.Position = UDim2.new(0, kx, 0.5, 0)
 		fill.Size = UDim2.fromOffset(math.max(kx, 9), 10)
-		Settings[key] = a
 		onChanged(key, a)
 	end
 	task.defer(function()
@@ -1598,11 +1609,11 @@ end
 do
 	local p = pages["INNOCENT"]
 	lbl(p, "Auto Farm Coins", 21, 157, 240, 33)
-	keyBox(p, "coinFarm_key", 240, 153, "H")
+	keyBox(p, "coinFarm_key", 240, 153, Enum.KeyCode.H)
 	toggle(p, "autoFarmCoins", 330, 153, 75, false)
 
 	lbl(p, "Auto Take Gun", 21, 215, 240, 33)
-	keyBox(p, "autoTake_key", 240, 211, "G")
+	keyBox(p, "autoTake_key", 240, 211, Enum.KeyCode.G)
 	toggle(p, "autoTakeGun", 330, 211, 75, false)
 end
 
@@ -1610,77 +1621,72 @@ end
 do
 	local p = pages["MURDER"]
 	lbl(p, "Fling Murderer", 21, 157, 240, 33)
-	keyBox(p, "flingMurder_key", 240, 153, "T")
+	keyBox(p, "flingMurder_key", 240, 153, Enum.KeyCode.T)
 	toggle(p, "flingMurder", 330, 153, 75, false)
 
 	lbl(p, "Fling Sheriff", 21, 215, 240, 33)
-	keyBox(p, "flingSheriff_key", 240, 211, "X")
+	keyBox(p, "flingSheriff_key", 240, 211, Enum.KeyCode.X)
 	toggle(p, "flingSheriff", 330, 211, 75, false)
 end
 
 -- SHERIFF TAB
 do
 	local p = pages["SHERIFF"]
-	lbl(p, "RightShift = Menu", 21, 157, 400, 28, C.gray)
-	lbl(p, "Coins: slow fly, 4 per cycle", 21, 200, 400, 22, C.gray)
-	lbl(p, "Walk Fling: Velocity Based", 21, 240, 400, 22, C.gray)
-	lbl(p, "Fly: WASD + Space/Ctrl", 21, 280, 400, 22, C.gray)
-	lbl(p, "Murderer red · Sheriff blue · Innocent green", 21, 320, 400, 20, C.gray)
 end
 
 -- EVERYONE TAB
 do
 	local p = pages["EVERYONE"]
 	lbl(p, "Toggle ESP", 21, 157, 200, 33)
-	keyBox(p, "esp_key", 215, 153, "R")
+	keyBox(p, "esp_key", 215, 153, Enum.KeyCode.R)
 	toggle(p, "esp", 320, 153, 75, true)
 
 	lbl(p, "Box ESP", 21, 210, 200, 33)
-	keyBox(p, "box_key", 189, 206, "B")
+	keyBox(p, "box_key", 189, 206, Enum.KeyCode.B)
 	toggle(p, "boxEsp", 291, 206, 75, true)
 
 	lbl(p, "Skeleton ESP", 21, 263, 220, 33)
-	keyBox(p, "skeleton_key", 239, 262, "K")
+	keyBox(p, "skeleton_key", 239, 262, Enum.KeyCode.K)
 	toggle(p, "skeletonEsp", 338, 259, 75, true)
 
 	lbl(p, "Highlight ESP", 21, 316, 230, 33)
-	keyBox(p, "highlight_key", 247, 312, "L")
+	keyBox(p, "highlight_key", 247, 312, Enum.KeyCode.L)
 	toggle(p, "highlightEsp", 348, 312, 75, true)
 
 	lbl(p, "Name Label", 21, 369, 200, 33)
-	keyBox(p, "label_key", 200, 365, "N")
+	keyBox(p, "label_key", 200, 365, Enum.KeyCode.N)
 	toggle(p, "labelEsp", 300, 365, 75, true)
 
 	lbl(p, "Role Tag", 21, 422, 200, 33)
-	keyBox(p, "role_key", 180, 418, "M")
+	keyBox(p, "role_key", 180, 418, Enum.KeyCode.M)
 	toggle(p, "roleEsp", 280, 418, 75, true)
 
 	lbl(p, "Distance", 21, 475, 200, 33)
-	keyBox(p, "distance_key", 180, 471, "J")
+	keyBox(p, "distance_key", 180, 471, Enum.KeyCode.J)
 	toggle(p, "distanceEsp", 280, 471, 75, true)
 
 	lbl(p, "3D Body ESP", 21, 528, 220, 33)
-	keyBox(p, "body3d_key", 230, 524, "U")
+	keyBox(p, "body3d_key", 230, 524, Enum.KeyCode.U)
 	toggle(p, "body3dEsp", 330, 524, 75, true)
 
 	lbl(p, "Gun Drop ESP", 21, 581, 220, 33)
-	keyBox(p, "gun_key", 230, 577, "P")
+	keyBox(p, "gun_key", 230, 577, Enum.KeyCode.P)
 	toggle(p, "gunEsp", 330, 577, 75, true)
 
 	lbl(p, "Fly", 21, 640, 160, 33)
-	keyBox(p, "fly_key", 179, 636, "F")
+	keyBox(p, "fly_key", 179, 636, Enum.KeyCode.F)
 	toggle(p, "fly", 320, 636, 75, false)
 
 	lbl(p, "Speed", 21, 700, 160, 33)
-	keyBox(p, "speed_key", 179, 696, "V")
+	keyBox(p, "speed_key", 179, 696, Enum.KeyCode.V)
 	toggle(p, "speed", 320, 696, 75, false)
 
 	lbl(p, "Noclip", 21, 760, 160, 33)
-	keyBox(p, "noclip_key", 179, 756, "C")
+	keyBox(p, "noclip_key", 179, 756, Enum.KeyCode.C)
 	toggle(p, "noclip", 320, 756, 75, false)
 
 	lbl(p, "Walk Fling", 21, 820, 200, 33)
-	keyBox(p, "walkFling_key", 200, 816, "Y")
+	keyBox(p, "walkFling_key", 200, 816, Enum.KeyCode.Y)
 	toggle(p, "walkFling", 320, 816, 75, false)
 
 	lbl(p, "max distance", 21, 885, 250, 28, C.gray)
@@ -1717,27 +1723,18 @@ local function flip(uiKey)
 	if ToggleControls[uiKey] then ToggleControls[uiKey].toggle() end
 end
 
+-- Fixed Global Input Listener for all keybinds
 UIS.InputBegan:Connect(function(input, processed)
-	if processed then return end
 	if input.KeyCode == OPEN_KEY then
 		gui.Enabled = not gui.Enabled
 		return
 	end
-	if input.KeyCode == S.ESPKey then flip("esp")
-	elseif input.KeyCode == S.BoxKey then flip("boxEsp")
-	elseif input.KeyCode == S.SkeletonKey then flip("skeletonEsp")
-	elseif input.KeyCode == S.HighlightKey then flip("highlightEsp")
-	elseif input.KeyCode == S.LabelKey then flip("labelEsp")
-	elseif input.KeyCode == S.RoleKey then flip("roleEsp")
-	elseif input.KeyCode == S.DistKey then flip("distanceEsp")
-	elseif input.KeyCode == S.Body3DKey then flip("body3dEsp")
-	elseif input.KeyCode == S.GunKey then flip("gunEsp")
-	elseif input.KeyCode == S.AutoTakeKey then flip("autoTakeGun")
-	elseif input.KeyCode == S.FlyKey then flip("fly")
-	elseif input.KeyCode == S.SpeedKey then flip("speed")
-	elseif input.KeyCode == S.NoclipKey then flip("noclip")
-	elseif input.KeyCode == S.WalkFlingKey then flip("walkFling")
-	elseif input.KeyCode == S.FlingMurderKey then flip("flingMurder")
-	elseif input.KeyCode == S.FlingSheriffKey then flip("flingSheriff")
+	if processed then return end
+
+	for actionKey, keyCode in pairs(S) do
+		if input.KeyCode == keyCode then
+			flip(actionKey)
+			break
+		end
 	end
 end)
