@@ -1,6 +1,6 @@
 --[[
-	DIH SCRIPT – MM2
-	ESP · GunDrop · Auto Take · Coins (slow fly) · Fly · Speed · Noclip · WalkFling
+	DIH SCRIPT – MM2 (Rewritten Hub - Instant TP, Fling & Return)
+	ESP · GunDrop · Auto Take · Coins (slow fly) · Fly · Speed · Noclip · WalkFling · Instant Flings + Return TP
 ]]
 
 local Players           = game:GetService("Players")
@@ -41,9 +41,9 @@ local CFG = {
 	autoTakeGun = false,
 	autoTakeDelay = 0.15,
 	autoFarmCoins = false,
-	coinFarmDelay = 0.45,      -- linger on coin
-	coinFarmSpeed = 28,        -- slow fly speed (not FlySpeed)
-	coinFarmPause = 0.8,       -- pause between coins
+	coinFarmDelay = 0.45,
+	coinFarmSpeed = 28,
+	coinFarmPause = 0.8,
 	boxThickness = 1.5,
 	skeletonThickness = 1.2,
 	font = 2,
@@ -58,6 +58,8 @@ local CFG = {
 	WalkSpeed = 50,
 	NoclipEnabled = false,
 	WalkFlingEnabled = false,
+	FlingMurder = false,
+	FlingSheriff = false,
 }
 
 local roleCache, lastRolePoll = {}, 0
@@ -264,117 +266,120 @@ local function ApplyWalkSpeed()
 end
 
 ------------------------------------------------------------------
--- WALKFLING (normal walk · fling on touch only)
+-- WALKFLING & TARGET FLING (INSTANT TP + FLING + RETURN)
 ------------------------------------------------------------------
-local WalkFlingConnection = nil
-local WalkFlingTouched = {}
-local flingCooldown = {}
+local walkflinging = false
+local WalkFlingJumpConn = nil
+local WalkFlingDiedConn = nil
 
 local function StopWalkFling()
-	if WalkFlingConnection then
-		WalkFlingConnection:Disconnect()
-		WalkFlingConnection = nil
-	end
-	for _, conn in pairs(WalkFlingTouched) do
-		pcall(function() conn:Disconnect() end)
-	end
-	table.clear(WalkFlingTouched)
-	table.clear(flingCooldown)
-
-	local char = LocalPlayer.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if hrp then
-		hrp.AssemblyAngularVelocity = Vector3.zero
-	end
-end
-
-local function flingPlayer(otherHRP, myHRP)
-	if not otherHRP or not otherHRP.Parent then return end
-	local plr = Players:GetPlayerFromCharacter(otherHRP.Parent)
-	if not plr or plr == LocalPlayer then return end
-	if flingCooldown[plr] and tick() - flingCooldown[plr] < 0.35 then return end
-	flingCooldown[plr] = tick()
-
-	-- direction away from you
-	local dir = (otherHRP.Position - myHRP.Position)
-	if dir.Magnitude < 0.1 then
-		dir = myHRP.CFrame.LookVector
-	else
-		dir = dir.Unit
-	end
-
-	-- strong push + spin on THEM (works when you have physics influence)
-	pcall(function()
-		otherHRP.AssemblyLinearVelocity = dir * 120 + Vector3.new(0, 90, 0)
-		otherHRP.AssemblyAngularVelocity = Vector3.new(
-			math.random(-1, 1) * 80,
-			math.random(-1, 1) * 80,
-			math.random(-1, 1) * 80
-		)
-	end)
-
-	-- brief local spin only on contact (helps physics fling without constant spin)
-	pcall(function()
-		myHRP.AssemblyAngularVelocity = Vector3.new(0, 2e4, 0)
-	end)
-	task.delay(0.08, function()
-		if myHRP and myHRP.Parent then
-			myHRP.AssemblyAngularVelocity = Vector3.zero
-		end
-	end)
-end
-
-local function hookWalkFlingTouches(char)
-	for _, conn in pairs(WalkFlingTouched) do
-		pcall(function() conn:Disconnect() end)
-	end
-	table.clear(WalkFlingTouched)
-
-	local hrp = char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
-
-	local function onTouched(hit)
-		if not CFG.WalkFlingEnabled then return end
-		if not hit or not hit.Parent then return end
-		local otherChar = hit.Parent
-		if not otherChar:FindFirstChildOfClass("Humanoid") then
-			otherChar = hit.Parent.Parent
-		end
-		if not otherChar then return end
-		local otherHRP = otherChar:FindFirstChild("HumanoidRootPart")
-		local otherHum = otherChar:FindFirstChildOfClass("Humanoid")
-		if not otherHRP or not otherHum or otherHum.Health <= 0 then return end
-		if otherChar == char then return end
-		flingPlayer(otherHRP, hrp)
-	end
-
-	-- hook main body parts for reliable touch
-	for _, name in ipairs({"HumanoidRootPart", "UpperTorso", "Torso", "Head", "Left Arm", "Right Arm", "Left Leg", "Right Leg",
-		"LeftUpperArm", "RightUpperArm", "LeftUpperLeg", "RightUpperLeg"}) do
-		local part = char:FindFirstChild(name)
-		if part and part:IsA("BasePart") then
-			WalkFlingTouched[name] = part.Touched:Connect(onTouched)
-		end
+	walkflinging = false
+	if WalkFlingJumpConn then WalkFlingJumpConn:Disconnect() WalkFlingJumpConn = nil end
+	if WalkFlingDiedConn then WalkFlingDiedConn:Disconnect() WalkFlingDiedConn = nil end
+	local Character = LocalPlayer.Character
+	if Character then
+		local Root = Character:FindFirstChild("HumanoidRootPart")
+		local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+		if Root then Root.CanCollide = true end
+		if Humanoid then Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end
 	end
 end
 
 local function StartWalkFling()
 	StopWalkFling()
-	local char = LocalPlayer.Character
-	if char then
-		hookWalkFlingTouches(char)
-	end
-	-- keep angular velocity cleared while walking (normal movement)
-	WalkFlingConnection = RunService.Heartbeat:Connect(function()
-		if not CFG.WalkFlingEnabled then return end
-		local c = LocalPlayer.Character
-		local hrp = c and c:FindFirstChild("HumanoidRootPart")
-		if hrp and hrp.AssemblyAngularVelocity.Magnitude > 1e3 then
-			-- only clear if not in the brief contact pulse
-			-- (pulse lasts ~0.08s; leave it alone if just triggered)
-		end
+	local Character = LocalPlayer.Character
+	if not Character then return end
+	local Root = Character:FindFirstChild("HumanoidRootPart")
+	local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+	if not Root or not Humanoid then return end
+
+	walkflinging = true
+	WalkFlingDiedConn = Humanoid.Died:Connect(function() walkflinging = false end)
+	WalkFlingJumpConn = UIS.JumpRequest:Connect(function()
+		if walkflinging then Humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end
+	end)
+
+	Root.CanCollide = false
+	Humanoid:ChangeState(11)
+
+	task.spawn(function()
+		repeat 
+			RunService.Heartbeat:Wait()
+			if not Root or not Root.Parent then break end
+			local vel = Root.Velocity
+			Root.Velocity = vel * 10000 + Vector3.new(0, 10000, 0)
+			RunService.RenderStepped:Wait()
+			Root.Velocity = vel
+			RunService.Stepped:Wait()
+			Root.Velocity = vel + Vector3.new(0, 0.1, 0)
+		until walkflinging == false or CFG.WalkFlingEnabled == false
 	end)
 end
+
+-- TÉLÉPORTATION SUR LA CIBLE, FLINGUE, PUIS RETOUR À LA POSITION DE DÉPART
+task.spawn(function()
+	local lastFlingMurderState = false
+	local lastFlingSheriffState = false
+	local originalCF = nil
+
+	while true do
+		task.wait(0.1)
+		
+		local murderTriggered = CFG.FlingMurder and not lastFlingMurderState
+		local sheriffTriggered = CFG.FlingSheriff and not lastFlingSheriffState
+		
+		lastFlingMurderState = CFG.FlingMurder
+		lastFlingSheriffState = CFG.FlingSheriff
+
+		if CFG.FlingMurder or CFG.FlingSheriff then
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			
+			if hrp and hum and hum.Health > 0 then
+				if (murderTriggered or sheriffTriggered) or not originalCF then
+					originalCF = hrp.CFrame
+				end
+
+				for _, player in ipairs(Players:GetPlayers()) do
+					if player ~= LocalPlayer then
+						local role = detectRole(player)
+						local shouldFling = (CFG.FlingMurder and role == "Murderer") or (CFG.FlingSheriff and role == "Sheriff")
+						
+						if shouldFling then
+							local targetChar = player.Character
+							local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+							local targetHum = targetChar and targetChar:FindFirstChildOfClass("Humanoid")
+							
+							if targetHrp and targetHum and targetHum.Health > 0 then
+								for _, part in ipairs(char:GetDescendants()) do
+									if part:IsA("BasePart") then part.CanCollide = false end
+								end
+
+								local startTime = tick()
+								while tick() - startTime < 0.3 do
+									if not targetHrp or not targetHrp.Parent or not hrp.Parent then break end
+									hrp.CFrame = targetHrp.CFrame
+									hrp.AssemblyLinearVelocity = Vector3.new(30000, 30000, 30000)
+									hrp.AssemblyAngularVelocity = Vector3.new(99999, 99999, 99999)
+									RunService.Heartbeat:Wait()
+								end
+
+								if hrp and hrp.Parent and originalCF then
+									hrp.CFrame = originalCF
+									hrp.AssemblyLinearVelocity = Vector3.zero
+									hrp.AssemblyAngularVelocity = Vector3.zero
+								end
+							end
+						end
+					end
+				end
+			end
+		else
+			originalCF = nil
+		end
+	end
+end)
 
 LocalPlayer.CharacterAdded:Connect(function(char)
 	task.wait(0.5)
@@ -764,7 +769,7 @@ local function renderGunESP()
 end
 
 ------------------------------------------------------------------
--- AUTO FARM COINS (SLOW fly – anti kick)
+-- AUTO FARM COINS
 ------------------------------------------------------------------
 local function isCoin(obj)
 	return obj and obj:IsA("BasePart") and obj.Name == "Coin_Server"
@@ -800,7 +805,6 @@ local function moveToward(hrp, targetPos, speed, timeout)
 			return true
 		end
 		local dir = delta.Unit
-		-- ease near the coin
 		local useSpeed = speed
 		if dist < 20 then
 			useSpeed = math.max(12, speed * 0.45)
@@ -839,24 +843,15 @@ local function farmCoinsOnce()
 		return (a.Position - hrp.Position).Magnitude < (b.Position - hrp.Position).Magnitude
 	end)
 
-	-- only farm a few coins per cycle (less suspicious)
 	local maxPerCycle = math.min(#list, 4)
 	local batch = {}
-	for i = 1, maxPerCycle do
-		batch[i] = list[i]
-	end
+	for i = 1, maxPerCycle do batch[i] = list[i] end
 
 	coinFarmBusy = true
 	local wasFlying = CFG.FlyEnabled
-	if not wasFlying then
-		CFG.FlyEnabled = true
-		StartFly()
-	end
+	if not wasFlying then CFG.FlyEnabled = true StartFly() end
 	local wasNoclip = CFG.NoclipEnabled
-	if not wasNoclip then
-		CFG.NoclipEnabled = true
-		SetNoclip(true)
-	end
+	if not wasNoclip then CFG.NoclipEnabled = true SetNoclip(true) end
 
 	local farmSpeed = CFG.coinFarmSpeed or 28
 
@@ -869,29 +864,20 @@ local function farmCoinsOnce()
 		if not hrp or not hum or hum.Health <= 0 then break end
 
 		moveToward(hrp, coin.Position + Vector3.new(0, 2, 0), farmSpeed, 18)
-		-- linger so coin registers
 		task.wait(CFG.coinFarmDelay or 0.45)
-		-- pause before next coin
 		if FlyBV and FlyBV.Parent then FlyBV.Velocity = Vector3.new(0, 0.3, 0) end
 		task.wait(CFG.coinFarmPause or 0.8)
 	end
 
 	if FlyBV and FlyBV.Parent then FlyBV.Velocity = Vector3.zero end
 
-	if not wasFlying then
-		CFG.FlyEnabled = false
-		StopFly()
-	end
-	if not wasNoclip then
-		CFG.NoclipEnabled = false
-		SetNoclip(false)
-	end
+	if not wasFlying then CFG.FlyEnabled = false StopFly() end
+	if not wasNoclip then CFG.NoclipEnabled = false SetNoclip(false) end
 	coinFarmBusy = false
 end
 
 task.spawn(function()
 	while true do
-		-- longer gap between cycles
 		task.wait(2.5)
 		if CFG.autoFarmCoins and not coinFarmBusy then
 			pcall(farmCoinsOnce)
@@ -1122,6 +1108,8 @@ local S = {
 	NoclipKey = Enum.KeyCode.C,
 	CoinFarmKey = Enum.KeyCode.H,
 	WalkFlingKey = Enum.KeyCode.Y,
+	FlingMurderKey = Enum.KeyCode.T,
+	FlingSheriffKey = Enum.KeyCode.X,
 }
 
 local function KeyNameToEnum(name)
@@ -1154,6 +1142,8 @@ local function onChanged(name, value)
 		end
 	elseif name == "autoTakeGun" then CFG.autoTakeGun = value
 	elseif name == "autoFarmCoins" then CFG.autoFarmCoins = value
+	elseif name == "flingMurder" then CFG.FlingMurder = value
+	elseif name == "flingSheriff" then CFG.FlingSheriff = value
 	elseif name == "maxDistance" then CFG.maxDistance = math.floor(200 + value * 2800 + 0.5)
 	elseif name == "fly" then
 		CFG.FlyEnabled = value
@@ -1186,6 +1176,8 @@ local function onChanged(name, value)
 	elseif name == "noclip_key" then local e = KeyNameToEnum(value) if e then S.NoclipKey = e end
 	elseif name == "coinFarm_key" then local e = KeyNameToEnum(value) if e then S.CoinFarmKey = e end
 	elseif name == "walkFling_key" then local e = KeyNameToEnum(value) if e then S.WalkFlingKey = e end
+	elseif name == "flingMurder_key" then local e = KeyNameToEnum(value) if e then S.FlingMurderKey = e end
+	elseif name == "flingSheriff_key" then local e = KeyNameToEnum(value) if e then S.FlingSheriffKey = e end
 	end
 end
 
@@ -1230,6 +1222,27 @@ local function text(parent, str, font, size, x, y, w, h, color)
 	l.TextXAlignment = Enum.TextXAlignment.Left
 	l.TextYAlignment = Enum.TextYAlignment.Center
 	l.Parent = parent
+	local s = Instance.new("UIStroke")
+	s.Thickness = 1.5
+	s.Color = C.black
+	s.Transparency = 0.35
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+	s.Parent = l
+	return l
+end
+
+local function lbl(page, str, x, y, w, h, color)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Text = str
+	l.FontFace = FREDOKA
+	l.TextSize = h - 8
+	l.TextColor3 = color or C.white
+	l.Position = UDim2.fromOffset(x, y)
+	l.Size = UDim2.fromOffset(w, h)
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextYAlignment = Enum.TextYAlignment.Center
+	l.Parent = page
 	local s = Instance.new("UIStroke")
 	s.Thickness = 1.5
 	s.Color = C.black
@@ -1311,7 +1324,7 @@ Instance.new("UIPadding", close).PaddingTop = UDim.new(0, 6)
 close.MouseButton1Click:Connect(function() gui.Enabled = false end)
 
 local pages, tabPills = {}, {}
-local activeTab = "VISUALS"
+local activeTab = "INNOCENT"
 local VIEW_TOP = 125
 
 local viewport = Instance.new("Frame")
@@ -1322,9 +1335,10 @@ viewport.ClipsDescendants = true
 viewport.Parent = main
 
 local tabDefs = {
-	{ "VISUALS", 13, 81, 100, 38, 15, 98, 35, 2.0 },
-	{ "MOVEMENT", 120, 81, 105, 38, 14, 100, 35, -1.5 },
-	{ "SETTINGS", 235, 81, 93, 38, 14, 88, 35, 1.2 },
+	{ "INNOCENT", 10,  81, 100, 38, 13, 98,  35, 1.5 },
+	{ "MURDER",   114, 81, 100, 38, 13, 98,  35, -1.0 },
+	{ "SHERIFF",  218, 81, 100, 38, 13, 98,  35, 1.0 },
+	{ "EVERYONE", 322, 81, 115, 38, 11, 112, 35, -1.2 },
 }
 
 local setScroll
@@ -1536,12 +1550,43 @@ local function slider(page, key, x, y, defaultA)
 	end)
 end
 
-local function lbl(page, str, x, y, w, size, color)
-	text(page, str, FREDOKA, size, x, y, w, 30, color)
+-- INNOCENT TAB
+do
+	local p = pages["INNOCENT"]
+	lbl(p, "Auto Farm Coins", 21, 157, 240, 33)
+	keyBox(p, "coinFarm_key", 240, 153, "H")
+	toggle(p, "autoFarmCoins", 330, 153, 75, false)
+
+	lbl(p, "Auto Take Gun", 21, 215, 240, 33)
+	keyBox(p, "autoTake_key", 240, 211, "G")
+	toggle(p, "autoTakeGun", 330, 211, 75, false)
 end
 
+-- MURDER TAB
 do
-	local p = pages["VISUALS"]
+	local p = pages["MURDER"]
+	lbl(p, "Fling Murderer", 21, 157, 240, 33)
+	keyBox(p, "flingMurder_key", 240, 153, "T")
+	toggle(p, "flingMurder", 330, 153, 75, false)
+
+	lbl(p, "Fling Sheriff", 21, 215, 240, 33)
+	keyBox(p, "flingSheriff_key", 240, 211, "X")
+	toggle(p, "flingSheriff", 330, 211, 75, false)
+end
+
+-- SHERIFF TAB
+do
+	local p = pages["SHERIFF"]
+	lbl(p, "RightShift = Menu", 21, 157, 400, 28, C.gray)
+	lbl(p, "Coins: slow fly, 4 per cycle", 21, 200, 400, 22, C.gray)
+	lbl(p, "Walk Fling: Velocity Based", 21, 240, 400, 22, C.gray)
+	lbl(p, "Fly: WASD + Space/Ctrl", 21, 280, 400, 22, C.gray)
+	lbl(p, "Murderer red · Sheriff blue · Innocent green", 21, 320, 400, 20, C.gray)
+end
+
+-- EVERYONE TAB
+do
+	local p = pages["EVERYONE"]
 	lbl(p, "Toggle ESP", 21, 157, 200, 33)
 	keyBox(p, "esp_key", 215, 153, "R")
 	toggle(p, "esp", 320, 153, 75, true)
@@ -1578,53 +1623,33 @@ do
 	keyBox(p, "gun_key", 230, 577, "P")
 	toggle(p, "gunEsp", 330, 577, 75, true)
 
-	lbl(p, "Auto Take Gun", 21, 634, 250, 33)
-	keyBox(p, "autoTake_key", 250, 630, "G")
-	toggle(p, "autoTakeGun", 340, 630, 75, false)
+	lbl(p, "Fly", 21, 640, 160, 33)
+	keyBox(p, "fly_key", 179, 636, "F")
+	toggle(p, "fly", 320, 636, 75, false)
 
-	lbl(p, "max distance", 21, 690, 250, 28, C.gray)
-	slider(p, "maxDistance", 20, 735, math.clamp((CFG.maxDistance - 200) / 2800, 0, 1))
+	lbl(p, "Speed", 21, 700, 160, 33)
+	keyBox(p, "speed_key", 179, 696, "V")
+	toggle(p, "speed", 320, 696, 75, false)
+
+	lbl(p, "Noclip", 21, 760, 160, 33)
+	keyBox(p, "noclip_key", 179, 756, "C")
+	toggle(p, "noclip", 320, 756, 75, false)
+
+	lbl(p, "Walk Fling", 21, 820, 200, 33)
+	keyBox(p, "walkFling_key", 200, 816, "Y")
+	toggle(p, "walkFling", 320, 816, 75, false)
+
+	lbl(p, "max distance", 21, 885, 250, 28, C.gray)
+	slider(p, "maxDistance", 20, 930, math.clamp((CFG.maxDistance - 200) / 2800, 0, 1))
+
+	lbl(p, "Fly speed", 21, 980, 200, 28, C.gray)
+	slider(p, "flySpeed", 20, 1025, math.clamp((CFG.FlySpeed - 10) / 190, 0, 1))
+
+	lbl(p, "Walk Speed", 21, 1075, 200, 28, C.gray)
+	slider(p, "walkSpeed", 20, 1120, math.clamp((CFG.WalkSpeed - 16) / 184, 0, 1))
 end
 
-do
-	local p = pages["MOVEMENT"]
-	lbl(p, "Fly", 21, 157, 160, 33)
-	keyBox(p, "fly_key", 179, 153, "F")
-	toggle(p, "fly", 320, 153, 75, false)
-
-	lbl(p, "Speed", 21, 217, 160, 33)
-	keyBox(p, "speed_key", 179, 213, "V")
-	toggle(p, "speed", 320, 213, 75, false)
-
-	lbl(p, "Noclip", 21, 277, 160, 33)
-	keyBox(p, "noclip_key", 179, 273, "C")
-	toggle(p, "noclip", 320, 273, 75, false)
-
-	lbl(p, "Walk Fling", 21, 337, 200, 33)
-	keyBox(p, "walkFling_key", 200, 333, "Y")
-	toggle(p, "walkFling", 320, 333, 75, false)
-
-	lbl(p, "Auto Farm Coins", 21, 397, 250, 33)
-	keyBox(p, "coinFarm_key", 250, 393, "H")
-	toggle(p, "autoFarmCoins", 340, 393, 75, false)
-
-	lbl(p, "Fly speed", 26, 458, 200, 28, C.gray)
-	slider(p, "flySpeed", 23, 507, math.clamp((CFG.FlySpeed - 10) / 190, 0, 1))
-
-	lbl(p, "Walk Speed", 21, 551, 200, 28, C.gray)
-	slider(p, "walkSpeed", 20, 600, math.clamp((CFG.WalkSpeed - 16) / 184, 0, 1))
-end
-
-do
-	local p = pages["SETTINGS"]
-	lbl(p, "RightShift = Menu", 21, 157, 400, 28, C.gray)
-	lbl(p, "Coins: slow fly, 4 per cycle", 21, 200, 400, 22, C.gray)
-	lbl(p, "Walk Fling: spin while walking", 21, 240, 400, 22, C.gray)
-	lbl(p, "Fly: WASD + Space/Ctrl", 21, 280, 400, 22, C.gray)
-	lbl(p, "Murderer red · Sheriff blue · Innocent green", 21, 320, 400, 20, C.gray)
-end
-
-showPage("VISUALS")
+showPage("INNOCENT")
 
 local dragStart, startPos
 titleBar.InputBegan:Connect(function(i)
@@ -1669,5 +1694,7 @@ UIS.InputBegan:Connect(function(input, processed)
 	elseif input.KeyCode == S.NoclipKey then flip("noclip")
 	elseif input.KeyCode == S.CoinFarmKey then flip("autoFarmCoins")
 	elseif input.KeyCode == S.WalkFlingKey then flip("walkFling")
+	elseif input.KeyCode == S.FlingMurderKey then flip("flingMurder")
+	elseif input.KeyCode == S.FlingSheriffKey then flip("flingSheriff")
 	end
 end)
