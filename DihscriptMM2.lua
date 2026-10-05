@@ -60,6 +60,14 @@ local CFG = {
 	AntiFlingEnabled = false,
 	FlingMurder = false,
 	FlingSheriff = false,
+	-- Silent Aim
+	SilentAimEnabled = false,
+	SilentAimFOV = 320,          -- screen FOV radius in pixels (larger = easier lock)
+	SilentAimSmooth = 0.0,       -- 0 = instant hard lock
+	SilentAimRange = 800,        -- max studs
+	SilentAimShowFOV = true,
+	SilentAimPreferMurderer = true,
+	SilentAimTargetPart = "HumanoidRootPart", -- or "Head", "Torso", "UpperTorso"
 }
 
 local roleCache, lastRolePoll = {}, 0
@@ -585,6 +593,162 @@ LocalPlayer.CharacterAdded:Connect(function(char)
 	if CFG.SpeedEnabled then StartSpeed() end
 	if CFG.WalkFlingEnabled then StartWalkFling() end
 end)
+
+------------------------------------------------------------------
+-- SILENT AIM / AIM LOCK (RMB hold + Murderer only when Prefer is on)
+------------------------------------------------------------------
+local silentTarget = nil
+local silentFovCircle = nil
+local mouse = LocalPlayer:GetMouse()
+
+local function getTargetPart(character)
+	if not character then return nil end
+	local preferred = CFG.SilentAimTargetPart or "HumanoidRootPart"
+	local part = character:FindFirstChild(preferred)
+	if part and part:IsA("BasePart") then return part end
+	for _, name in ipairs({"HumanoidRootPart", "UpperTorso", "Torso", "Head"}) do
+		part = character:FindFirstChild(name)
+		if part and part:IsA("BasePart") then return part end
+	end
+	return character.PrimaryPart
+end
+
+local function isValidSilentTarget(player)
+	if not player or player == LocalPlayer then return false end
+	local char = player.Character
+	if not char or not char:IsA("Model") then return false end
+	if char.Parent ~= workspace then return false end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return false end
+	return getTargetPart(char) ~= nil
+end
+
+local function getBestSilentTarget()
+	if not Camera then return nil end
+	local best, bestScore = nil, -math.huge
+	local camPos = Camera.CFrame.Position
+	local mousePos = UIS:GetMouseLocation()
+	local fov = CFG.SilentAimFOV
+	local range = CFG.SilentAimRange
+	local preferMurderer = CFG.SilentAimPreferMurderer
+
+	-- Keep roles fresh
+	if tick() - lastRolePoll > 0.3 then
+		lastRolePoll = tick()
+		pollRolesFromServer()
+	end
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if not isValidSilentTarget(player) then continue end
+
+		local role = detectRole(player)
+		local isMurderer = (role == "Murderer")
+
+		-- When Prefer Murderer is ON → ONLY lock on Murderer, ignore everyone else
+		if preferMurderer then
+			if not isMurderer then continue end
+		else
+			-- Prefer off: never target Sheriff/Hero (friendlies)
+			if role == "Sheriff" or role == "Hero" then continue end
+		end
+
+		local char = player.Character
+		local part = getTargetPart(char)
+		local worldPos = part.Position
+		local dist = (worldPos - camPos).Magnitude
+		if dist > range then continue end
+
+		local screenPos, onScreen = Camera:WorldToViewportPoint(worldPos)
+		if not onScreen or screenPos.Z <= 0 then continue end
+
+		local screenVec = Vector2.new(screenPos.X, screenPos.Y)
+		local screenDist = (screenVec - mousePos).Magnitude
+
+		-- Murderer gets expanded FOV when preferred
+		local effectiveFOV = (isMurderer and preferMurderer) and (fov * 3.5) or fov
+		if screenDist > effectiveFOV then continue end
+
+		local score
+		if isMurderer then
+			score = 10000000 - screenDist * 8 - dist * 0.3
+		else
+			score = 5000 - screenDist * 4 - dist * 0.4
+		end
+
+		if score > bestScore then
+			bestScore = score
+			best = player
+		end
+	end
+	return best
+end
+
+local function updateSilentAim()
+	if not CFG.SilentAimEnabled then
+		silentTarget = nil
+		if silentFovCircle then silentFovCircle.Visible = false end
+		return
+	end
+
+	-- Only when holding the gun
+	if not hasTool(LocalPlayer, "Gun") then
+		silentTarget = nil
+		if silentFovCircle then silentFovCircle.Visible = false end
+		return
+	end
+
+	-- ONLY lock while Right Mouse Button is held
+	local rmbHeld = UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+	if not rmbHeld then
+		silentTarget = nil
+		if silentFovCircle then silentFovCircle.Visible = false end
+		return
+	end
+
+	mouse = LocalPlayer:GetMouse()
+	silentTarget = getBestSilentTarget()
+
+	-- FOV circle (only visible while RMB held)
+	if CFG.SilentAimShowFOV then
+		if not silentFovCircle then
+			silentFovCircle = Drawing.new("Circle")
+			silentFovCircle.Thickness = 2
+			silentFovCircle.NumSides = 64
+			silentFovCircle.Filled = false
+			silentFovCircle.Color = Color3.fromRGB(255, 50, 50)
+			silentFovCircle.Transparency = 0.25
+			silentFovCircle.Visible = true
+		end
+		silentFovCircle.Position = UIS:GetMouseLocation()
+		silentFovCircle.Radius = CFG.SilentAimFOV
+		silentFovCircle.Visible = true
+	elseif silentFovCircle then
+		silentFovCircle.Visible = false
+	end
+
+	-- HARD CAMERA LOCK while RMB is held
+	if silentTarget then
+		local part = getTargetPart(silentTarget.Character)
+		if part and Camera then
+			local targetPos = part.Position + Vector3.new(0, 0.2, 0)
+			local camPos = Camera.CFrame.Position
+
+			local alpha = math.clamp(1 - (CFG.SilentAimSmooth or 0), 0.25, 1)
+			local desiredCF = CFrame.new(camPos, targetPos)
+
+			if CFG.SilentAimSmooth <= 0.05 then
+				Camera.CFrame = desiredCF
+			else
+				Camera.CFrame = Camera.CFrame:Lerp(desiredCF, alpha)
+			end
+
+			pcall(function()
+				mouse.Hit = CFrame.new(targetPos)
+				mouse.Target = part
+			end)
+		end
+	end
+end
 
 ------------------------------------------------------------------
 -- DRAWING & ESP
@@ -1224,6 +1388,7 @@ RunService.RenderStepped:Connect(function()
 	render()
 	renderGunESP()
 	UpdateFly()
+	updateSilentAim()
 end)
 
 ------------------------------------------------------------------
@@ -1276,6 +1441,7 @@ local S = {
 	antiFling = Enum.KeyCode.Z,
 	flingMurder = Enum.KeyCode.T,
 	flingSheriff = Enum.KeyCode.X,
+	silentAim = Enum.KeyCode.Q,
 }
 
 local keyMap = {
@@ -1297,6 +1463,7 @@ local keyMap = {
 	antiFling_key = "antiFling",
 	flingMurder_key = "flingMurder",
 	flingSheriff_key = "flingSheriff",
+	silentAim_key = "silentAim",
 }
 
 local function MapFly(a) return math.floor(10 + a * 190 + 0.5) end
@@ -1341,6 +1508,21 @@ local function onChanged(name, value)
 	elseif name == "walkFling" then
 		CFG.WalkFlingEnabled = value
 		if value then StartWalkFling() else StopWalkFling() end
+	elseif name == "silentAim" then
+		CFG.SilentAimEnabled = value
+		if not value and silentFovCircle then
+			silentFovCircle.Visible = false
+		end
+	elseif name == "silentAimShowFOV" then
+		CFG.SilentAimShowFOV = value
+	elseif name == "silentAimPreferMurderer" then
+		CFG.SilentAimPreferMurderer = value
+	elseif name == "silentAimFOV" then
+		CFG.SilentAimFOV = math.floor(40 + value * 360 + 0.5) -- 40-400 px
+	elseif name == "silentAimSmooth" then
+		CFG.SilentAimSmooth = value -- 0-1
+	elseif name == "silentAimRange" then
+		CFG.SilentAimRange = math.floor(50 + value * 950 + 0.5) -- 50-1000
 	elseif name == "flySpeed" then CFG.FlySpeed = MapFly(value)
 	elseif name == "walkSpeed" then
 		CFG.WalkSpeed = MapWalk(value)
@@ -1743,6 +1925,24 @@ end
 -- SHERIFF TAB
 do
 	local p = pages["SHERIFF"]
+	lbl(p, "Silent Aim", 21, 157, 200, 33)
+	keyBox(p, "silentAim_key", 215, 153, Enum.KeyCode.Q)
+	toggle(p, "silentAim", 320, 153, 75, false)
+
+	lbl(p, "Show FOV Circle", 21, 210, 240, 33)
+	toggle(p, "silentAimShowFOV", 320, 206, 75, true)
+
+	lbl(p, "Prefer Murderer", 21, 263, 240, 33)
+	toggle(p, "silentAimPreferMurderer", 320, 259, 75, true)
+
+	lbl(p, "FOV Radius", 21, 320, 250, 28, C.gray)
+	slider(p, "silentAimFOV", 20, 360, math.clamp((CFG.SilentAimFOV - 40) / 360, 0, 1))
+
+	lbl(p, "Smoothness (0 = pure silent)", 21, 410, 300, 28, C.gray)
+	slider(p, "silentAimSmooth", 20, 450, CFG.SilentAimSmooth)
+
+	lbl(p, "Max Range", 21, 500, 250, 28, C.gray)
+	slider(p, "silentAimRange", 20, 540, math.clamp((CFG.SilentAimRange - 50) / 950, 0, 1))
 end
 
 -- EVERYONE TAB
