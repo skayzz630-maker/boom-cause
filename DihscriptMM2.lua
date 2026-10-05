@@ -402,8 +402,18 @@ local function StopWalkFling()
 	if Character then
 		local Root = Character:FindFirstChild("HumanoidRootPart")
 		local Humanoid = Character:FindFirstChildOfClass("Humanoid")
-		if Root then Root.CanCollide = true end
-		if Humanoid then Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end
+		if Root then
+			-- CRITICAL: zero all velocity so disabling doesn't send you flying
+			Root.AssemblyLinearVelocity = Vector3.zero
+			Root.AssemblyAngularVelocity = Vector3.zero
+			Root.Velocity = Vector3.zero
+			Root.RotVelocity = Vector3.zero
+			Root.CanCollide = true
+		end
+		if Humanoid then
+			Humanoid.PlatformStand = false
+			Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end
 	end
 end
 
@@ -417,34 +427,134 @@ local function StartWalkFling()
 
 	walkflinging = true
 	WalkFlingDiedConn = Humanoid.Died:Connect(function() walkflinging = false end)
-	WalkFlingJumpConn = UIS.JumpRequest:Connect(function()
-		if walkflinging then Humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end
-	end)
+	-- No JumpRequest hook = no infinite jump
 
 	Root.CanCollide = false
-	Humanoid:ChangeState(11)
 
 	task.spawn(function()
 		repeat 
 			RunService.Heartbeat:Wait()
 			if not Root or not Root.Parent then break end
-			if not targetFlingActive then
-				local vel = Root.Velocity
-				Root.Velocity = vel * 10000 + Vector3.new(0, 10000, 0)
+			if not targetFlingActive and walkflinging then
+				local vel = Root.AssemblyLinearVelocity
+				-- Classic walkfling velocity spam (horizontal bias, limited vertical)
+				Root.AssemblyLinearVelocity = Vector3.new(vel.X * 10000, math.clamp(vel.Y, -50, 50) + 40, vel.Z * 10000)
+				Root.Velocity = Root.AssemblyLinearVelocity
 				RunService.RenderStepped:Wait()
-				if not targetFlingActive then
+				if not targetFlingActive and walkflinging then
+					Root.AssemblyLinearVelocity = vel
 					Root.Velocity = vel
 					RunService.Stepped:Wait()
-					Root.Velocity = vel + Vector3.new(0, 0.1, 0)
+					Root.AssemblyLinearVelocity = vel + Vector3.new(0, 0.05, 0)
+					Root.Velocity = Root.AssemblyLinearVelocity
 				end
 			end
 		until walkflinging == false or CFG.WalkFlingEnabled == false
+		-- Final safety zero when loop ends
+		pcall(function()
+			local r = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if r then
+				r.AssemblyLinearVelocity = Vector3.zero
+				r.AssemblyAngularVelocity = Vector3.zero
+				r.Velocity = Vector3.zero
+				r.RotVelocity = Vector3.zero
+			end
+		end)
 	end)
 end
 
 local function runTargetFling(targetRole)
 	if targetFlingActive then return end
 	targetFlingActive = true
+
+	local SAFE_Y_MIN = -50   -- never go below this
+	local SAFE_Y_MAX = 500   -- never go above this
+	local safetyConn = nil
+
+	local function forceSafe(root, originalPos)
+		if not root or not root.Parent then return end
+		local pos = root.Position
+		-- Anti-void + anti-sky
+		if pos.Y < SAFE_Y_MIN or pos.Y > SAFE_Y_MAX or pos ~= pos then -- NaN check
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+			root.Velocity = Vector3.zero
+			root.RotVelocity = Vector3.zero
+			if originalPos then
+				root.CFrame = originalPos + Vector3.new(0, 5, 0)
+			else
+				root.CFrame = CFrame.new(pos.X, math.clamp(pos.Y, 10, 100), pos.Z)
+			end
+		end
+	end
+
+	local function cleanupAndReturn(originalPos, colliders)
+		if safetyConn then
+			pcall(function() safetyConn:Disconnect() end)
+			safetyConn = nil
+		end
+
+		local currentChar = LocalPlayer.Character
+		local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+		local currentHum = currentChar and currentChar:FindFirstChildOfClass("Humanoid")
+
+		-- Instant hard stop
+		if currentHrp then
+			pcall(function()
+				currentHrp.Anchored = true
+				currentHrp.AssemblyLinearVelocity = Vector3.zero
+				currentHrp.AssemblyAngularVelocity = Vector3.zero
+				currentHrp.Velocity = Vector3.zero
+				currentHrp.RotVelocity = Vector3.zero
+				-- Force safe position
+				if originalPos then
+					currentHrp.CFrame = originalPos + Vector3.new(0, 6, 0)
+				end
+			end)
+		end
+
+		task.wait(0.15)
+
+		if currentHrp then
+			pcall(function()
+				currentHrp.AssemblyLinearVelocity = Vector3.zero
+				currentHrp.AssemblyAngularVelocity = Vector3.zero
+				currentHrp.Velocity = Vector3.zero
+				currentHrp.RotVelocity = Vector3.zero
+				currentHrp.Anchored = false
+			end)
+		end
+
+		if currentHum then
+			pcall(function()
+				currentHum.PlatformStand = false
+				currentHum:ChangeState(Enum.HumanoidStateType.GettingUp)
+				-- Extra safety: if somehow still falling hard, reset again
+				task.delay(0.3, function()
+					if currentHum and currentHum.Parent and currentHum.Health > 0 then
+						currentHum:ChangeState(Enum.HumanoidStateType.GettingUp)
+					end
+				end)
+			end)
+		end
+
+		if currentChar and colliders then
+			for _, part in ipairs(currentChar:GetDescendants()) do
+				if part:IsA("BasePart") then
+					if colliders[part] ~= nil then
+						part.CanCollide = colliders[part]
+					end
+					part.Massless = false
+				end
+			end
+		end
+
+		CFG.FlingMurder = false
+		CFG.FlingSheriff = false
+		if ToggleControls_Ref["flingMurder"] then ToggleControls_Ref["flingMurder"].set(false) end
+		if ToggleControls_Ref["flingSheriff"] then ToggleControls_Ref["flingSheriff"].set(false) end
+		targetFlingActive = false
+	end
 
 	local char = LocalPlayer.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -456,7 +566,7 @@ local function runTargetFling(targetRole)
 
 	local targetHrp, targetPlayer = nil, nil
 	local searchStart = tick()
-	while not targetHrp and (tick() - searchStart < 8) do
+	while not targetHrp and (tick() - searchStart < 7) do
 		pollRolesFromServer()
 		for _, player in ipairs(Players:GetPlayers()) do
 			if player ~= LocalPlayer then
@@ -490,10 +600,11 @@ local function runTargetFling(targetRole)
 	end
 
 	local originalPos = hrp.CFrame
+	local startHealth = hum.Health
+
 	hum.PlatformStand = true
 	hum:ChangeState(Enum.HumanoidStateType.Physics)
 
-	-- Fully disable our collisions
 	local colliders = {}
 	for _, part in ipairs(char:GetDescendants()) do
 		if part:IsA("BasePart") then
@@ -504,6 +615,14 @@ local function runTargetFling(targetRole)
 	end
 	hrp.CanCollide = true
 	hrp.Massless = false
+
+	-- PERMANENT ANTI-VOID SAFETY NET while flinging
+	safetyConn = RunService.Heartbeat:Connect(function()
+		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if root then
+			forceSafe(root, originalPos)
+		end
+	end)
 
 	local function refreshTarget()
 		if not targetPlayer then return nil end
@@ -517,151 +636,145 @@ local function runTargetFling(targetRole)
 		return nil
 	end
 
-	-- ========== CHASE (high speed, velocity prediction) ==========
+	local function stillAlive()
+		local c = LocalPlayer.Character
+		local h = c and c:FindFirstChildOfClass("Humanoid")
+		local root = c and c:FindFirstChild("HumanoidRootPart")
+		if not (c and h and root and h.Health > 0) then return false end
+		-- Also treat void as death
+		if root.Position.Y < SAFE_Y_MIN then return false end
+		return true
+	end
+
+	-- ===== CHASE =====
 	local chaseConn
 	chaseConn = RunService.Heartbeat:Connect(function()
-		if not hrp or not hrp.Parent or hum.Health <= 0 then return end
+		if not stillAlive() then return end
+		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
 		local tHrp = refreshTarget()
 		if not tHrp then return end
-		targetHrp = tHrp
 
 		local tPos = tHrp.Position
 		local tVel = tHrp.AssemblyLinearVelocity
-		-- Strong prediction for fast movers
-		local predicted = tPos + tVel * 0.18 + Vector3.new(0, 0.4, 0)
-		local myPos = hrp.Position
+		local predicted = tPos + tVel * 0.15 + Vector3.new(0, 0.5, 0)
+		local myPos = root.Position
 		local dir = predicted - myPos
 		local dist = dir.Magnitude
 
-		if dist > 1.8 then
-			local speed = math.clamp(90 + dist * 55, 120, 350)
-			hrp.CFrame = CFrame.lookAt(myPos, predicted)
-			hrp.AssemblyLinearVelocity = dir.Unit * speed
-			hrp.Velocity = dir.Unit * speed -- legacy too
+		if dist > 2 then
+			local speed = math.clamp(100 + dist * 50, 130, 300)
+			root.CFrame = CFrame.lookAt(myPos, predicted)
+			root.AssemblyLinearVelocity = dir.Unit * speed
+			root.Velocity = dir.Unit * speed
 		else
-			hrp.CFrame = CFrame.new(predicted)
-			hrp.AssemblyLinearVelocity = tVel
-			hrp.Velocity = tVel
+			root.CFrame = CFrame.new(predicted)
+			root.AssemblyLinearVelocity = tVel
+			root.Velocity = tVel
 		end
+		forceSafe(root, originalPos)
 	end)
 
 	local chaseStart = tick()
-	while tick() - chaseStart < 2.5 do
+	while tick() - chaseStart < 2.0 do
+		if not stillAlive() then break end
 		local tHrp = refreshTarget()
 		if not tHrp then break end
-		if (hrp.Position - tHrp.Position).Magnitude < 3.5 then break end
+		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if root and (root.Position - tHrp.Position).Magnitude < 3.5 then break end
 		local active = (targetRole == "Murderer" and CFG.FlingMurder) or (targetRole == "Sheriff" and CFG.FlingSheriff)
 		if not active then break end
 		task.wait()
 	end
 	if chaseConn then chaseConn:Disconnect() end
 
-	-- ========== FLING (very aggressive continuous attach + velocity spam) ==========
-	-- This is the key part that fails on movers — we now spam CFrame + velocity
-	-- every single Heartbeat and also try to disturb the target's own velocity.
-	local flingConn
-	local flingStart = tick()
-	flingConn = RunService.Heartbeat:Connect(function()
-		if not hrp or not hrp.Parent or hum.Health <= 0 then return end
+	if not stillAlive() then
+		cleanupAndReturn(originalPos, colliders)
+		return
+	end
+
+	-- ===== FLING BURSTS (controlled power so we don't void ourselves) =====
+	for burst = 1, 4 do
+		if not stillAlive() then break end
 		local tHrp = refreshTarget()
-		if not tHrp then return end
-		targetHrp = tHrp
+		if not tHrp then break end
+		local active = (targetRole == "Murderer" and CFG.FlingMurder) or (targetRole == "Sheriff" and CFG.FlingSheriff)
+		if not active then break end
 
-		local tPos = tHrp.Position
-		local tVel = tHrp.AssemblyLinearVelocity
+		local burstConn
+		burstConn = RunService.Heartbeat:Connect(function()
+			if not stillAlive() then return end
+			local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if not root then return end
+			local tHrp = refreshTarget()
+			if not tHrp then return end
 
-		-- Predict where they will be next frame
-		local predicted = tPos + tVel * 0.1
+			local tPos = tHrp.Position
+			local tVel = tHrp.AssemblyLinearVelocity
+			local predicted = tPos + tVel * 0.08
 
-		-- Random micro-offset so we keep colliding / transferring momentum
-		local rx = (math.random() - 0.5) * 1.4
-		local ry = 0.15 + math.random() * 0.9
-		local rz = (math.random() - 0.5) * 1.4
-
-		-- Snap onto them every frame (critical for movers)
-		hrp.CFrame = CFrame.new(predicted + Vector3.new(rx, ry, rz))
-			* CFrame.Angles(
-				math.rad(math.random(0, 360)),
-				math.rad(math.random(0, 360)),
-				math.rad(math.random(0, 360))
+			-- Keep ourselves at a safe height relative to target
+			local safeY = math.max(predicted.Y + 0.4, SAFE_Y_MIN + 10)
+			local offset = Vector3.new(
+				(math.random() - 0.5) * 1.0,
+				0.3 + math.random() * 0.5,
+				(math.random() - 0.5) * 1.0
 			)
+			local finalPos = Vector3.new(predicted.X, safeY, predicted.Z) + offset
 
-		-- Extreme velocity on ourselves
-		local power = 110000 + math.random(0, 40000)
-		local lv = Vector3.new(
-			math.random(-6000, 6000) + tVel.X * 1.2,
-			power,
-			math.random(-6000, 6000) + tVel.Z * 1.2
-		)
-		local av = Vector3.new(
-			math.random(-150000, 150000),
-			math.random(-150000, 150000),
-			math.random(-150000, 150000)
-		)
+			root.CFrame = CFrame.new(finalPos)
+				* CFrame.Angles(
+					math.rad(math.random(0, 360)),
+					math.rad(math.random(0, 360)),
+					math.rad(math.random(0, 360))
+				)
 
-		hrp.AssemblyLinearVelocity = lv
-		hrp.AssemblyAngularVelocity = av
-		hrp.Velocity = lv          -- legacy
-		hrp.RotVelocity = av       -- legacy
-
-		-- Also try to push the target itself (sometimes sticks on movers)
-		pcall(function()
-			tHrp.AssemblyLinearVelocity = tHrp.AssemblyLinearVelocity + Vector3.new(
-				math.random(-2000, 2000),
-				math.random(8000, 25000),
-				math.random(-2000, 2000)
+			-- Strong but not suicidal power (lower upward component)
+			local power = 45000 + math.random(0, 25000)
+			local lv = Vector3.new(
+				math.random(-3500, 3500) + tVel.X,
+				power,
+				math.random(-3500, 3500) + tVel.Z
 			)
-			tHrp.AssemblyAngularVelocity = Vector3.new(
+			local av = Vector3.new(
 				math.random(-80000, 80000),
 				math.random(-80000, 80000),
 				math.random(-80000, 80000)
 			)
+
+			root.AssemblyLinearVelocity = lv
+			root.AssemblyAngularVelocity = av
+			root.Velocity = lv
+			root.RotVelocity = av
+
+			-- Light push on target
+			pcall(function()
+				tHrp.AssemblyLinearVelocity = tHrp.AssemblyLinearVelocity + Vector3.new(
+					math.random(-1000, 1000),
+					math.random(4000, 12000),
+					math.random(-1000, 1000)
+				)
+			end)
+
+			forceSafe(root, originalPos)
 		end)
-	end)
 
-	-- Longer fling window so movers stay under pressure
-	task.wait(2.2)
-	if flingConn then flingConn:Disconnect() end
+		task.wait(0.35)
+		if burstConn then burstConn:Disconnect() end
 
-	-- ========== RETURN ==========
-	local currentChar = LocalPlayer.Character
-	local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
-	local currentHum = currentChar and currentChar:FindFirstChildOfClass("Humanoid")
-
-	if currentHrp then
-		currentHrp.Anchored = true
-		currentHrp.AssemblyLinearVelocity = Vector3.zero
-		currentHrp.AssemblyAngularVelocity = Vector3.zero
-		currentHrp.Velocity = Vector3.zero
-		currentHrp.RotVelocity = Vector3.zero
-		currentHrp.CFrame = originalPos
-		task.wait(0.1)
-		currentHrp.Anchored = false
-		currentHrp.AssemblyLinearVelocity = Vector3.zero
-		currentHrp.AssemblyAngularVelocity = Vector3.zero
-	end
-
-	if currentHum then
-		currentHum.PlatformStand = false
-		currentHum:ChangeState(Enum.HumanoidStateType.GettingUp)
-	end
-
-	if currentChar then
-		for _, part in ipairs(currentChar:GetDescendants()) do
-			if part:IsA("BasePart") then
-				if colliders[part] ~= nil then
-					part.CanCollide = colliders[part]
-				end
-				part.Massless = false
+		-- Stabilize
+		if stillAlive() then
+			local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if root then
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.AssemblyAngularVelocity = Vector3.zero
+				forceSafe(root, originalPos)
 			end
+			task.wait(0.07)
 		end
 	end
 
-	CFG.FlingMurder = false
-	CFG.FlingSheriff = false
-	if ToggleControls_Ref["flingMurder"] then ToggleControls_Ref["flingMurder"].set(false) end
-	if ToggleControls_Ref["flingSheriff"] then ToggleControls_Ref["flingSheriff"].set(false) end
-	targetFlingActive = false
+	cleanupAndReturn(originalPos, colliders)
 end
 
 task.spawn(function()
@@ -2007,18 +2120,20 @@ do
 	lbl(p, "Auto Take Gun", 21, 215, 240, 33)
 	keyBox(p, "autoTake_key", 240, 211, Enum.KeyCode.G)
 	toggle(p, "autoTakeGun", 330, 211, 75, false)
+
+	lbl(p, "Fling Murderer", 21, 273, 240, 33)
+	keyBox(p, "flingMurder_key", 240, 269, Enum.KeyCode.T)
+	toggle(p, "flingMurder", 330, 269, 75, false)
+
+	lbl(p, "Fling Sheriff", 21, 331, 240, 33)
+	keyBox(p, "flingSheriff_key", 240, 327, Enum.KeyCode.X)
+	toggle(p, "flingSheriff", 330, 327, 75, false)
 end
 
 -- MURDER TAB
 do
 	local p = pages["MURDER"]
-	lbl(p, "Fling Murderer", 21, 157, 240, 33)
-	keyBox(p, "flingMurder_key", 240, 153, Enum.KeyCode.T)
-	toggle(p, "flingMurder", 330, 153, 75, false)
-
-	lbl(p, "Fling Sheriff", 21, 215, 240, 33)
-	keyBox(p, "flingSheriff_key", 240, 211, Enum.KeyCode.X)
-	toggle(p, "flingSheriff", 330, 211, 75, false)
+	-- Fling options moved to INNOCENT tab
 end
 
 -- SHERIFF TAB
