@@ -454,9 +454,9 @@ local function runTargetFling(targetRole)
 		return 
 	end
 
-	local targetHrp = nil
+	local targetHrp, targetPlayer = nil, nil
 	local searchStart = tick()
-	while not targetHrp and (tick() - searchStart < 6) do
+	while not targetHrp and (tick() - searchStart < 8) do
 		pollRolesFromServer()
 		for _, player in ipairs(Players:GetPlayers()) do
 			if player ~= LocalPlayer then
@@ -467,19 +467,20 @@ local function runTargetFling(targetRole)
 					local tHum = targetChar and targetChar:FindFirstChildOfClass("Humanoid")
 					if tHrp and tHum and tHum.Health > 0 then
 						targetHrp = tHrp
+						targetPlayer = player
 						break
 					end
 				end
 			end
 		end
 		if not targetHrp then
-			task.wait(0.3)
+			task.wait(0.2)
 			local activeFlag = (targetRole == "Murderer" and CFG.FlingMurder) or (targetRole == "Sheriff" and CFG.FlingSheriff)
 			if not activeFlag then break end
 		end
 	end
 
-	if not targetHrp then
+	if not targetHrp or not targetPlayer then
 		targetFlingActive = false
 		CFG.FlingMurder = false
 		CFG.FlingSheriff = false
@@ -490,61 +491,156 @@ local function runTargetFling(targetRole)
 
 	local originalPos = hrp.CFrame
 	hum.PlatformStand = true
+	hum:ChangeState(Enum.HumanoidStateType.Physics)
 
+	-- Fully disable our collisions
 	local colliders = {}
 	for _, part in ipairs(char:GetDescendants()) do
 		if part:IsA("BasePart") then
 			colliders[part] = part.CanCollide
 			part.CanCollide = false
+			part.Massless = true
 		end
 	end
 	hrp.CanCollide = true
+	hrp.Massless = false
 
-	local approachConnection
-	approachConnection = RunService.Heartbeat:Connect(function()
-		if not hrp or not hrp.Parent or not targetHrp or not targetHrp.Parent then return end
-		local targetPos = targetHrp.Position
-		local direction = (targetPos - hrp.Position)
-		if direction.Magnitude > 3 then
-			hrp.AssemblyLinearVelocity = direction.Unit * 200
-			hrp.CFrame = CFrame.lookAt(hrp.Position, targetPos)
+	local function refreshTarget()
+		if not targetPlayer then return nil end
+		local tChar = targetPlayer.Character
+		if not tChar then return nil end
+		local tHrp = tChar:FindFirstChild("HumanoidRootPart")
+		local tHum = tChar:FindFirstChildOfClass("Humanoid")
+		if tHrp and tHum and tHum.Health > 0 then
+			return tHrp
+		end
+		return nil
+	end
+
+	-- ========== CHASE (high speed, velocity prediction) ==========
+	local chaseConn
+	chaseConn = RunService.Heartbeat:Connect(function()
+		if not hrp or not hrp.Parent or hum.Health <= 0 then return end
+		local tHrp = refreshTarget()
+		if not tHrp then return end
+		targetHrp = tHrp
+
+		local tPos = tHrp.Position
+		local tVel = tHrp.AssemblyLinearVelocity
+		-- Strong prediction for fast movers
+		local predicted = tPos + tVel * 0.18 + Vector3.new(0, 0.4, 0)
+		local myPos = hrp.Position
+		local dir = predicted - myPos
+		local dist = dir.Magnitude
+
+		if dist > 1.8 then
+			local speed = math.clamp(90 + dist * 55, 120, 350)
+			hrp.CFrame = CFrame.lookAt(myPos, predicted)
+			hrp.AssemblyLinearVelocity = dir.Unit * speed
+			hrp.Velocity = dir.Unit * speed -- legacy too
 		else
-			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.CFrame = CFrame.new(predicted)
+			hrp.AssemblyLinearVelocity = tVel
+			hrp.Velocity = tVel
 		end
 	end)
 
-	task.wait(0.8)
-	if approachConnection then approachConnection:Disconnect() end
+	local chaseStart = tick()
+	while tick() - chaseStart < 2.5 do
+		local tHrp = refreshTarget()
+		if not tHrp then break end
+		if (hrp.Position - tHrp.Position).Magnitude < 3.5 then break end
+		local active = (targetRole == "Murderer" and CFG.FlingMurder) or (targetRole == "Sheriff" and CFG.FlingSheriff)
+		if not active then break end
+		task.wait()
+	end
+	if chaseConn then chaseConn:Disconnect() end
 
-	local flingConnection
-	flingConnection = RunService.Heartbeat:Connect(function()
-		if not hrp or not hrp.Parent or not targetHrp or not targetHrp.Parent or hum.Health <= 0 then return end
-		local tPos = targetHrp.Position
-		hrp.CFrame = CFrame.new(tPos + Vector3.new(0, 0.2, 0)) * CFrame.Angles(math.random(), math.random(), math.random())
-		hrp.AssemblyLinearVelocity = Vector3.new(math.random(-3000, 3000), 75000, math.random(-3000, 3000))
-		hrp.AssemblyAngularVelocity = Vector3.new(75000, 75000, 75000)
+	-- ========== FLING (very aggressive continuous attach + velocity spam) ==========
+	-- This is the key part that fails on movers — we now spam CFrame + velocity
+	-- every single Heartbeat and also try to disturb the target's own velocity.
+	local flingConn
+	local flingStart = tick()
+	flingConn = RunService.Heartbeat:Connect(function()
+		if not hrp or not hrp.Parent or hum.Health <= 0 then return end
+		local tHrp = refreshTarget()
+		if not tHrp then return end
+		targetHrp = tHrp
+
+		local tPos = tHrp.Position
+		local tVel = tHrp.AssemblyLinearVelocity
+
+		-- Predict where they will be next frame
+		local predicted = tPos + tVel * 0.1
+
+		-- Random micro-offset so we keep colliding / transferring momentum
+		local rx = (math.random() - 0.5) * 1.4
+		local ry = 0.15 + math.random() * 0.9
+		local rz = (math.random() - 0.5) * 1.4
+
+		-- Snap onto them every frame (critical for movers)
+		hrp.CFrame = CFrame.new(predicted + Vector3.new(rx, ry, rz))
+			* CFrame.Angles(
+				math.rad(math.random(0, 360)),
+				math.rad(math.random(0, 360)),
+				math.rad(math.random(0, 360))
+			)
+
+		-- Extreme velocity on ourselves
+		local power = 110000 + math.random(0, 40000)
+		local lv = Vector3.new(
+			math.random(-6000, 6000) + tVel.X * 1.2,
+			power,
+			math.random(-6000, 6000) + tVel.Z * 1.2
+		)
+		local av = Vector3.new(
+			math.random(-150000, 150000),
+			math.random(-150000, 150000),
+			math.random(-150000, 150000)
+		)
+
+		hrp.AssemblyLinearVelocity = lv
+		hrp.AssemblyAngularVelocity = av
+		hrp.Velocity = lv          -- legacy
+		hrp.RotVelocity = av       -- legacy
+
+		-- Also try to push the target itself (sometimes sticks on movers)
+		pcall(function()
+			tHrp.AssemblyLinearVelocity = tHrp.AssemblyLinearVelocity + Vector3.new(
+				math.random(-2000, 2000),
+				math.random(8000, 25000),
+				math.random(-2000, 2000)
+			)
+			tHrp.AssemblyAngularVelocity = Vector3.new(
+				math.random(-80000, 80000),
+				math.random(-80000, 80000),
+				math.random(-80000, 80000)
+			)
+		end)
 	end)
 
-	task.wait(0.9)
-	if flingConnection then flingConnection:Disconnect() end
+	-- Longer fling window so movers stay under pressure
+	task.wait(2.2)
+	if flingConn then flingConn:Disconnect() end
 
+	-- ========== RETURN ==========
 	local currentChar = LocalPlayer.Character
 	local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
 	local currentHum = currentChar and currentChar:FindFirstChildOfClass("Humanoid")
-	
+
 	if currentHrp then
 		currentHrp.Anchored = true
 		currentHrp.AssemblyLinearVelocity = Vector3.zero
 		currentHrp.AssemblyAngularVelocity = Vector3.zero
+		currentHrp.Velocity = Vector3.zero
+		currentHrp.RotVelocity = Vector3.zero
 		currentHrp.CFrame = originalPos
-		
-		task.wait(0.05)
-		
+		task.wait(0.1)
 		currentHrp.Anchored = false
 		currentHrp.AssemblyLinearVelocity = Vector3.zero
 		currentHrp.AssemblyAngularVelocity = Vector3.zero
 	end
-	
+
 	if currentHum then
 		currentHum.PlatformStand = false
 		currentHum:ChangeState(Enum.HumanoidStateType.GettingUp)
@@ -552,8 +648,11 @@ local function runTargetFling(targetRole)
 
 	if currentChar then
 		for _, part in ipairs(currentChar:GetDescendants()) do
-			if part:IsA("BasePart") and colliders[part] ~= nil then
-				part.CanCollide = colliders[part]
+			if part:IsA("BasePart") then
+				if colliders[part] ~= nil then
+					part.CanCollide = colliders[part]
+				end
+				part.Massless = false
 			end
 		end
 	end
