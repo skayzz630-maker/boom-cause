@@ -2139,7 +2139,7 @@ end
 -- SHERIFF TAB
 do
 	local p = pages["SHERIFF"]
-	lbl(p, "Silent Aim", 21, 157, 200, 33)
+	lbl(p, "Aimbot", 21, 157, 200, 33)
 	keyBox(p, "silentAim_key", 215, 153, Enum.KeyCode.Q)
 	toggle(p, "silentAim", 320, 153, 75, false)
 
@@ -2152,7 +2152,7 @@ do
 	lbl(p, "FOV Radius", 21, 320, 250, 28, C.gray)
 	slider(p, "silentAimFOV", 20, 360, math.clamp((CFG.SilentAimFOV - 40) / 360, 0, 1))
 
-	lbl(p, "Smoothness (0 = pure silent)", 21, 410, 300, 28, C.gray)
+	lbl(p, "Smoothness (0 = insta lock)", 21, 410, 300, 28, C.gray)
 	slider(p, "silentAimSmooth", 20, 450, CFG.SilentAimSmooth)
 
 	lbl(p, "Max Range", 21, 500, 250, 28, C.gray)
