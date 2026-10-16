@@ -1,12 +1,4 @@
---[[
-    ================================================================
-    [ OYB OFFICIAL | ROBLOX DEVELOPER ]
-    Website: https://oybofficial.com/
-    Builder: https://oybofficial.com/keysystem
-    YouTube: https://youtube.com/@OYBOfficial
-    Discord: https://discord.gg/kT55J724BK
-    ================================================================
-]]
+
 local Config = {
     -- [1] PlatoBoost Settings
     ServiceId       = 34768, -- Your PlatoBoost Service ID
