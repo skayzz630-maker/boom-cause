@@ -1,4 +1,12 @@
-
+--[[
+    ================================================================
+    [ OYB OFFICIAL | ROBLOX DEVELOPER ]
+    Website: https://oybofficial.com/
+    Builder: https://oybofficial.com/keysystem
+    YouTube: https://youtube.com/@OYBOfficial
+    Discord: https://discord.gg/kT55J724BK
+    ================================================================
+]]
 local Config = {
     -- [1] PlatoBoost Settings
     ServiceId       = 34768, -- Your PlatoBoost Service ID
@@ -8,7 +16,7 @@ local Config = {
     Secret          = "Dihscriptersss", -- This makes the script ONLY run from the key script. Even if they copy the original obfuscated script to bypass the key, they won't be able to!
     
     -- [3] Scripts & Links
-    MainScriptURL   = "loadstring(game:HttpGet("https://raw.githubusercontent.com/skayzz630-maker/boom-cause/refs/heads/main/Dihscript.lua"))()", -- The raw URL of your main script
+    MainScriptURL   = "https://raw.githubusercontent.com/skayzz630-maker/boom-cause/refs/heads/main/Key"))()", -- The raw URL of your main script
     
     -- [4] Social Media Settings (Set to true to show, false to hide)
     ShowDiscord     = true,
